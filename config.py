@@ -416,13 +416,15 @@ def update_config(config, args):
                                         "det_len{0}".format(config.TRAIN.DATA.PREPROCESS.CROP_FACE.DETECTION.DYNAMIC_DETECTION_FREQUENCY),
                                         "Median_face_box{0}".format(config.TRAIN.DATA.PREPROCESS.CROP_FACE.DETECTION.USE_MEDIAN_FACE_BOX)
                                               ])
-    config.TRAIN.DATA.CACHED_PATH = os.path.join(config.TRAIN.DATA.CACHED_PATH, config.TRAIN.DATA.EXP_DATA_NAME)
+    # config.TRAIN.DATA.CACHED_PATH = os.path.join(config.TRAIN.DATA.CACHED_PATH, config.TRAIN.DATA.EXP_DATA_NAME)
+    config.TRAIN.DATA.CACHED_PATH = config.TRAIN.DATA.CACHED_PATH
+
 
     name, ext = os.path.splitext(config.TRAIN.DATA.FILE_LIST_PATH)
     if not ext: # no file extension
         FOLD_STR = '_' + config.TRAIN.DATA.FOLD.FOLD_NAME if config.TRAIN.DATA.FOLD.FOLD_NAME else ''
         config.TRAIN.DATA.FILE_LIST_PATH = os.path.join(config.TRAIN.DATA.FILE_LIST_PATH, \
-                                                        config.TRAIN.DATA.EXP_DATA_NAME + '_' + \
+                                                        # config.TRAIN.DATA.EXP_DATA_NAME + '_' + \
                                                         str(config.TRAIN.DATA.BEGIN) + '_' + \
                                                         str(config.TRAIN.DATA.END) + \
                                                         FOLD_STR + '.csv')
@@ -452,7 +454,8 @@ def update_config(config, args):
                                           "det_len{0}".format(config.VALID.DATA.PREPROCESS.CROP_FACE.DETECTION.DYNAMIC_DETECTION_FREQUENCY),
                                           "Median_face_box{0}".format(config.VALID.DATA.PREPROCESS.CROP_FACE.DETECTION.USE_MEDIAN_FACE_BOX)
                                                 ])
-        config.VALID.DATA.CACHED_PATH = os.path.join(config.VALID.DATA.CACHED_PATH, config.VALID.DATA.EXP_DATA_NAME)
+        # config.VALID.DATA.CACHED_PATH = os.path.join(config.VALID.DATA.CACHED_PATH, config.VALID.DATA.EXP_DATA_NAME)
+        config.VALID.DATA.CACHED_PATH = config.VALID.DATA.CACHED_PATH
 
         name, ext = os.path.splitext(config.VALID.DATA.FILE_LIST_PATH)
         if not ext:  # no file extension
@@ -489,7 +492,8 @@ def update_config(config, args):
                                         "det_len{0}".format(config.TEST.DATA.PREPROCESS.CROP_FACE.DETECTION.DYNAMIC_DETECTION_FREQUENCY),
                                         "Median_face_box{0}".format(config.TEST.DATA.PREPROCESS.CROP_FACE.DETECTION.USE_MEDIAN_FACE_BOX)
                                               ])
-    config.TEST.DATA.CACHED_PATH = os.path.join(config.TEST.DATA.CACHED_PATH, config.TEST.DATA.EXP_DATA_NAME)
+    # config.TEST.DATA.CACHED_PATH = os.path.join(config.TEST.DATA.CACHED_PATH, config.TEST.DATA.EXP_DATA_NAME)
+    config.TEST.DATA.CACHED_PATH = config.TEST.DATA.CACHED_PATH
 
     name, ext = os.path.splitext(config.TEST.DATA.FILE_LIST_PATH)
     if not ext: # no file extension
@@ -559,8 +563,9 @@ def update_config(config, args):
                                         "Median_face_box{0}".format(config.UNSUPERVISED.DATA.PREPROCESS.CROP_FACE.DETECTION.USE_MEDIAN_FACE_BOX),
                                         "unsupervised"
                                               ])
-    config.UNSUPERVISED.DATA.CACHED_PATH = os.path.join(config.UNSUPERVISED.DATA.CACHED_PATH, config.UNSUPERVISED.DATA.EXP_DATA_NAME)
-
+    # config.UNSUPERVISED.DATA.CACHED_PATH = os.path.join(config.UNSUPERVISED.DATA.CACHED_PATH, config.UNSUPERVISED.DATA.EXP_DATA_NAME)
+    config.UNSUPERVISED.DATA.CACHED_PATH = config.UNSUPERVISED.DATA.CACHED_PATH
+    
     name, ext = os.path.splitext(config.UNSUPERVISED.DATA.FILE_LIST_PATH)
     if not ext: # no file extension
         FOLD_STR = '_' + config.UNSUPERVISED.DATA.FOLD.FOLD_NAME if config.UNSUPERVISED.DATA.FOLD.FOLD_NAME else ''

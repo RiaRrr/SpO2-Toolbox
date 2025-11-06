@@ -17,5 +17,5 @@ debug_utils.py
 multi_test.py
 neural_methods/trainer/PhysnetTrainer_backup.py
 debug_utils_physnet.py
-test.yaml
+
 *.out

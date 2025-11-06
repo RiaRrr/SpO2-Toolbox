@@ -176,6 +176,8 @@ if __name__ == "__main__":
             train_loader = data_loader.LADHLoader.LADHLoader
         elif config.TRAIN.DATA.DATASET == "SUMS":
             train_loader = data_loader.SUMSLoader.SUMSLoader
+        elif config.TRAIN.DATA.DATASET == "SPO2":
+            train_loader = data_loader.SPO2Loader.SPO2Loader
         else:
             raise ValueError("Unsupported dataset! Currently supporting UBFC-rPPG, PURE, MMPD, \
                              SCAMPS, BP4D+ (Normal and BigSmall preprocessing), UBFC-PHYS and iBVP.")
@@ -191,7 +193,7 @@ if __name__ == "__main__":
                 device=config.DEVICE)
             data_loader_dict['train'] = DataLoader(
                 dataset=train_data_loader,
-                num_workers=16,
+                num_workers=0,
                 batch_size=config.TRAIN.BATCH_SIZE,
                 shuffle=True,
                 worker_init_fn=seed_worker,
@@ -223,6 +225,8 @@ if __name__ == "__main__":
             valid_loader = data_loader.LADHLoader.LADHLoader
         elif config.VALID.DATA.DATASET == "SUMS":
             valid_loader = data_loader.SUMSLoader.SUMSLoader
+        elif config.VALID.DATA.DATASET == "SPO2":
+            valid_loader = data_loader.SPO2Loader.SPO2Loader
         elif config.VALID.DATA.DATASET is None and not config.TEST.USE_LAST_EPOCH:
             raise ValueError("Validation dataset not specified despite USE_LAST_EPOCH set to False!")
         else:
@@ -239,7 +243,7 @@ if __name__ == "__main__":
                 device=config.DEVICE)
             data_loader_dict["valid"] = DataLoader(
                 dataset=valid_data,
-                num_workers=16,
+                num_workers=0,
                 batch_size=config.TRAIN.BATCH_SIZE,  # batch size for val is the same as train
                 shuffle=False,
                 worker_init_fn=seed_worker,
@@ -272,6 +276,8 @@ if __name__ == "__main__":
             test_loader = data_loader.LADHLoader.LADHLoader
         elif config.TEST.DATA.DATASET == "SUMS":
             test_loader = data_loader.SUMSLoader.SUMSLoader
+        elif config.TEST.DATA.DATASET == "SPO2":
+            test_loader = data_loader.SPO2Loader.SPO2Loader 
         else:
             raise ValueError("Unsupported dataset! Currently supporting UBFC-rPPG, PURE, MMPD, \
                              SCAMPS, BP4D+ (Normal and BigSmall preprocessing), UBFC-PHYS and iBVP.")
@@ -289,7 +295,7 @@ if __name__ == "__main__":
                 device=config.DEVICE)
             data_loader_dict["test"] = DataLoader(
                 dataset=test_data,
-                num_workers=16,
+                num_workers=0,
                 batch_size=config.INFERENCE.BATCH_SIZE,
                 shuffle=False,
                 worker_init_fn=seed_worker,
@@ -325,7 +331,7 @@ if __name__ == "__main__":
             device=config.DEVICE)
         data_loader_dict["unsupervised"] = DataLoader(
             dataset=unsupervised_data,
-            num_workers=16,
+            num_workers=1,
             batch_size=1,
             shuffle=False,
             worker_init_fn=seed_worker,

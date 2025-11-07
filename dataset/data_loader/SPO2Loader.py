@@ -135,9 +135,15 @@ class SPO2Loader(BaseLoader):
                     for d in os.listdir(data_path)
                     if os.path.isdir(os.path.join(data_path, d)) and len(d) == 6]
         if not data_dirs:
+            # 如果 data_dirs 是空的列表 []，则抛出异常，而不是返回 None 导致后续 TypeError
             raise ValueError(f"{self.dataset_name} Data path is empty or malformed! ({data_path})")
 
         dirs = []
+        
+        # 定义精确匹配的常量（转为大写）
+        RAW_PREFIX = "VIDEO_RAW_"
+        ZIP_NAME = "VIDEO_ZIP_H264.AVI"
+
         for data_dir in sorted(data_dirs):
             subject_name = os.path.split(data_dir)[-1]
             d_dirs = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
@@ -148,18 +154,49 @@ class SPO2Loader(BaseLoader):
                 session_path = os.path.join(data_dir, session)
                 items = os.listdir(session_path)
 
-                for item in items:
-                    if item.lower().endswith('.avi'):
-                        dirs.append({
-                            'index': session[1:] if session.startswith('v') else session,
-                            'path': os.path.join(session_path, item),
-                            'subject': subject_name,
-                            'type': item.split('_')[-1].split('.')[0] if '_' in item else 'raw'
-                        })
+                # 读取用户配置的视频类型（默认 None，表示不过滤）
+                video_type_config = getattr(self.config_data, "VIDEO_TYPE", None)
+                
+                # 将配置转换为大写，方便比较
+                video_type_upper = video_type_config.upper() if isinstance(video_type_config, str) else None
+                
+                print(self.config_data)
 
-        print(f"[SPO2Loader] Total {len(dirs)} video entries found.")
-        return dirs
+                for item in items:
+                    item_upper = item.upper()
+                    
+                    # 1. 跳过非 AVI 文件
+                    if not item_upper.endswith('.AVI'):
+                        continue
+
+                    should_skip = False
+
+                    # 2. 根据配置进行精确匹配过滤
+                    if video_type_upper:
+                        if video_type_upper == 'RAW':
+                            # 匹配所有以 VIDEO_RAW_ 开头的文件
+                            if not item_upper.startswith(RAW_PREFIX):
+                                should_skip = True
+                        elif video_type_upper == 'ZIP':
+                            # 严格匹配 video_ZIP_H264.AVI (用户要求的精确匹配)
+                            if item_upper != ZIP_NAME:
+                                should_skip = True
+                        # 如果配置了其他类型，则退回到子串包含匹配
+                        elif video_type_upper not in item_upper:
+                            should_skip = True
+
+                    if should_skip:
+                        continue
+
+                    dirs.append({
+                        'index': session[1:] if session.startswith('v') else session,
+                        'path': os.path.join(session_path, item),
+                        'subject': subject_name,
+                        # 尝试从文件名获取 type，例如 'video_RAW_RGBA.avi' -> 'RGBA'
+                        'type': item.split('_')[-1].split('.')[0] if '_' in item else 'raw'
+                    })
             
+        return dirs
 
     def split_raw_data(self, data_dirs, begin, end):
         """Returns a subset of data dirs, split with begin and end values."""

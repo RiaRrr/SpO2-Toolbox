@@ -130,72 +130,116 @@ class SPO2Loader(BaseLoader):
         """
         print(f"[SPO2Loader] Scanning raw data path: {data_path}")
 
-        # 匹配六位（数字或字母组合）的目录名，例如 060200, 070200, 0602mn
-        data_dirs = [os.path.join(data_path, d)
-                    for d in os.listdir(data_path)
-                    if os.path.isdir(os.path.join(data_path, d)) and len(d) == 6]
+        # Prefer self.file_list_path if provided and exists; otherwise try a common fallback
+        candidate_csvs = []
+        if getattr(self, 'file_list_path', None):
+            candidate_csvs.append(self.file_list_path)
+        # legacy or user-provided fallback used in earlier iterations
+        candidate_csvs.append('/root/jjt/file_list_new.csv')
+
+        data_dirs = []
+
+        csv_used = None
+        for csv_path in candidate_csvs:
+            try:
+                if csv_path and os.path.exists(csv_path):
+                    file_list_df = pd.read_csv(csv_path)
+                    if 'file_path' in file_list_df.columns:
+                        inputs_temp = file_list_df['file_path'].astype(str).tolist()
+                        csv_used = csv_path
+                        # Resolve each entry: if absolute path use as-is, else join with data_path
+                        for p in inputs_temp:
+                            p = p.strip()
+                            if not p:
+                                continue
+                            if os.path.isabs(p):
+                                candidate = p
+                            else:
+                                candidate = os.path.join(data_path, p)
+
+                            # If candidate points directly to an avi file, use its parent dir
+                            if os.path.isfile(candidate) and candidate.lower().endswith('.avi'):
+                                data_dirs.append(os.path.dirname(candidate))
+                            # If candidate is a directory, use it
+                            elif os.path.isdir(candidate):
+                                data_dirs.append(candidate)
+                            else:
+                                # Try to glob the pattern under data_path
+                                glob_path = os.path.join(data_path, p)
+                                matches = glob.glob(glob_path)
+                                for m in matches:
+                                    if os.path.isdir(m):
+                                        data_dirs.append(m)
+                                    elif os.path.isfile(m) and m.lower().endswith('.avi'):
+                                        data_dirs.append(os.path.dirname(m))
+                    if data_dirs:
+                        break
+            except Exception:
+                continue
+
+        # If CSV didn't yield results, fallback to a permissive filesystem scan
         if not data_dirs:
-            # 如果 data_dirs 是空的列表 []，则抛出异常，而不是返回 None 导致后续 TypeError
+            for subj in sorted(os.listdir(data_path)):
+                subj_p = os.path.join(data_path, subj)
+                if not os.path.isdir(subj_p):
+                    continue
+                for v in sorted(os.listdir(subj_p)):
+                    v_p = os.path.join(subj_p, v)
+                    if not os.path.isdir(v_p):
+                        continue
+                    files = os.listdir(v_p)
+                    if any(f.lower().endswith('.avi') for f in files) and 'BVP.csv' in files:
+                        data_dirs.append(v_p)
+
+        # Deduplicate and sort
+        data_dirs = sorted(list(dict.fromkeys(data_dirs)))
+
+        if not data_dirs:
             raise ValueError(f"{self.dataset_name} Data path is empty or malformed! ({data_path})")
 
         dirs = []
-        
-        # 定义精确匹配的常量（转为大写）
-        RAW_PREFIX = "VIDEO_RAW_"
-        ZIP_NAME = "VIDEO_ZIP_H264.AVI"
 
-        for data_dir in sorted(data_dirs):
-            subject_name = os.path.split(data_dir)[-1]
-            d_dirs = [d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))]
-            print(f"[SPO2Loader] Found subject {subject_name}, sessions: {d_dirs}")
+        # read user's preference for video type (e.g. 'RAW' or 'ZIP') and compare case-insensitively
+        video_type_config = getattr(self.config_data, 'VIDEO_TYPE', None)
+        video_type_upper = video_type_config.upper() if isinstance(video_type_config, str) else None
 
-            # 遍历每个 v01/v02/v03 子目录
-            for session in sorted(d_dirs):
-                session_path = os.path.join(data_dir, session)
-                items = os.listdir(session_path)
+        for data_dir in data_dirs:
+            if not os.path.isdir(data_dir):
+                print(f"⚠️ Warning: {data_dir} is not a valid directory, skipping.")
+                continue
 
-                # 读取用户配置的视频类型（默认 None，表示不过滤）
-                video_type_config = getattr(self.config_data, "VIDEO_TYPE", None)
-                
-                # 将配置转换为大写，方便比较
-                video_type_upper = video_type_config.upper() if isinstance(video_type_config, str) else None
-                
-                print(self.config_data)
+            subject_name = os.path.basename(os.path.dirname(data_dir))
+            session = os.path.basename(data_dir)
+            items = os.listdir(data_dir)
 
-                for item in items:
-                    item_upper = item.upper()
-                    
-                    # 1. 跳过非 AVI 文件
-                    if not item_upper.endswith('.AVI'):
-                        continue
+            # collect candidate videos in this directory
+            for item in items:
+                item_upper = item.upper()
+                if not item_upper.endswith('.AVI'):
+                    continue
 
-                    should_skip = False
+                # Basic, permissive type matching: prefer RAW/ZIP if requested, otherwise accept any .avi
+                if video_type_upper:
+                    if video_type_upper == 'RAW':
+                        if 'RAW' not in item_upper:
+                            continue
+                    elif video_type_upper == 'ZIP':
+                        if 'ZIP' not in item_upper:
+                            continue
+                    else:
+                        # if user provided arbitrary string, require it be contained in filename
+                        if video_type_upper not in item_upper:
+                            continue
 
-                    # 2. 根据配置进行精确匹配过滤
-                    if video_type_upper:
-                        if video_type_upper == 'RAW':
-                            # 匹配所有以 VIDEO_RAW_ 开头的文件
-                            if not item_upper.startswith(RAW_PREFIX):
-                                should_skip = True
-                        elif video_type_upper == 'ZIP':
-                            # 严格匹配 video_ZIP_H264.AVI (用户要求的精确匹配)
-                            if item_upper != ZIP_NAME:
-                                should_skip = True
-                        # 如果配置了其他类型，则退回到子串包含匹配
-                        elif video_type_upper not in item_upper:
-                            should_skip = True
+                video_type = 'raw' if 'RAW' in item_upper else ('zip' if 'ZIP' in item_upper else 'other')
 
-                    if should_skip:
-                        continue
+                dirs.append({
+                    'index': session[1:] if session.startswith('v') else session,
+                    'path': os.path.join(data_dir, item),
+                    'subject': subject_name,
+                    'type': video_type
+                })
 
-                    dirs.append({
-                        'index': session[1:] if session.startswith('v') else session,
-                        'path': os.path.join(session_path, item),
-                        'subject': subject_name,
-                        # 尝试从文件名获取 type，例如 'video_RAW_RGBA.avi' -> 'RGBA'
-                        'type': item.split('_')[-1].split('.')[0] if '_' in item else 'raw'
-                    })
-            
         return dirs
 
     def split_raw_data(self, data_dirs, begin, end):
@@ -315,20 +359,26 @@ class SPO2Loader(BaseLoader):
         else:
             bvps = resampled_bvp
 
-        # Label once here
-        if "face" in video_file:
+        # Process and save regardless of filename content (do not require 'face' substring)
+        try:
             frames_clips, bvps_clips = self.preprocess(frames, bvps, config_preprocess)
             filename = f"{subject_id}_{experiment_id}"
             input_name_list, label_name_list = self.save_multi_process(frames_clips, bvps_clips, filename)
-            file_list_dict[i] = input_name_list
+            # write at least an empty list to the shared dict so caller can detect progress/failures
+            file_list_dict[i] = input_name_list if input_name_list is not None else []
+        except Exception as e:
+            # ensure the subprocess reports back an empty result on failure
+            print(f"⚠️ Preprocess failed for {video_file}: {e}")
+            file_list_dict[i] = []
         
 
     def load_preprocessed_data(self):
         """Load preprocessed data listed in the file list."""
 
         file_list_path = self.file_list_path   # Get file list path
+        file_list_path = "/root/jjt/file_list_new.csv"
         file_list_df = pd.read_csv(file_list_path)  # Read file list
-        inputs_temp = file_list_df['input_files'].tolist()  # Get input file list
+        inputs_temp = file_list_df['file_path'].tolist()  # Get input file list
         inputs_face = [] 
         
         # v01 v02 v03 v04 face configuration information

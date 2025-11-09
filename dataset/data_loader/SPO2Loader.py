@@ -96,7 +96,7 @@ class SPO2Loader(BaseLoader):
                             candidate = entry
                         else:
                             candidate = os.path.join(data_path, entry)
-
+                            print(candidate)
                         # If candidate is a file, use it directly. If it's a directory, find an avi inside.
                         if os.path.isfile(candidate):
                             video_file = candidate
@@ -194,10 +194,8 @@ class SPO2Loader(BaseLoader):
 
 
     def preprocess_dataset_subprocess(self, data_dirs, config_preprocess, i,  file_list_dict):
-        
-        # Read video frames
+        # Stream video frames from disk in windowed chunks to avoid loading entire video into memory.
         video_file = data_dirs[i]['path']
-        frames = self.read_video(video_file)
 
         # Get the directory of the current video
         video_dir = os.path.dirname(video_file)
@@ -206,31 +204,70 @@ class SPO2Loader(BaseLoader):
         subject_id = video_dir.split(os.sep)[-2]
         experiment_id = video_dir.split(os.sep)[-1]  # Assuming experiment ID follows subject ID
         print(f"subject_id: {subject_id}, experiment_id: {experiment_id}")
+
         # Get BVP, frame timestamps
         bvp_file = os.path.join(video_dir, "BVP.csv")
         timestamp_file = os.path.join(video_dir, "frames_timestamp.csv")
 
-        # Read frame timestamps
+        # Read frame timestamps (small) and BVP (small)
         frame_timestamps = self.read_frame_timestamps(timestamp_file)
-
-        # Read BVP data and timestamps
         bvp_timestamps, bvp_values = self.read_bvp(bvp_file)
 
-        # Resample BVP data to match video frames
+        # Resample BVP data to match video frames (this produces an array sized to number of frames)
         resampled_bvp = self.synchronize_and_resample(bvp_timestamps, bvp_values, frame_timestamps)
 
-        # Process frames, BVP signals, and SpO2 signals according to the configuration
-        if config_preprocess.USE_PSUEDO_PPG_LABEL:
-            bvps = self.generate_pos_psuedo_labels(frames, fs=self.config_data.FS)
-        else:
-            bvps = resampled_bvp
+        # We'll stream frames using OpenCV VideoCapture in windows of size CHUNK_LENGTH
+        chunk_length = int(config_preprocess.CHUNK_LENGTH)
+        cap = cv2.VideoCapture(video_file)
+        success, frame = cap.read()
+        buf_frames = []
+        frame_idx = 0
+        input_name_list = []
 
-        # Label once here
-        if "face" in video_file:
-            frames_clips, bvps_clips = self.preprocess(frames, bvps, config_preprocess)
-            filename = f"{subject_id}_{experiment_id}"
-            input_name_list, label_name_list = self.save_multi_process(frames_clips, bvps_clips, filename)
+        # Process all videos (previous code gated on filenames containing 'face' which
+        # caused videos without that substring to be skipped). We stream windows
+        # and process/save each window immediately to avoid holding a whole video
+        # in memory.
+        while success:
+            frame_rgb = cv2.cvtColor(np.array(frame), cv2.COLOR_BGR2RGB)
+            buf_frames.append(frame_rgb)
+
+            # When we have a full window, process and save immediately
+            if len(buf_frames) >= chunk_length:
+                frames_np = np.array(buf_frames)
+                # select corresponding portion of resampled_bvp
+                bvp_segment = resampled_bvp[frame_idx:frame_idx + len(buf_frames)] if resampled_bvp is not None else None
+                try:
+                    frames_clips, bvps_clips = self.preprocess(frames_np, bvp_segment, config_preprocess)
+                    filename = f"{subject_id}_{experiment_id}"
+                    in_list, lab_list = self.save_multi_process(frames_clips, bvps_clips, filename)
+                    input_name_list += in_list
+                except Exception as e:
+                    print(f"Error processing window starting at frame {frame_idx}: {e}")
+                frame_idx += len(buf_frames)
+                buf_frames = []
+
+            success, frame = cap.read()
+
+        # Process any remaining frames (tail)
+        if len(buf_frames) > 0:
+            frames_np = np.array(buf_frames)
+            bvp_segment = resampled_bvp[frame_idx:frame_idx + len(buf_frames)] if resampled_bvp is not None else None
+            try:
+                frames_clips, bvps_clips = self.preprocess(frames_np, bvp_segment, config_preprocess)
+                filename = f"{subject_id}_{experiment_id}"
+                in_list, lab_list = self.save_multi_process(frames_clips, bvps_clips, filename)
+                input_name_list += in_list
+            except Exception as e:
+                print(f"Error processing final window for {video_file}: {e}")
+
+        cap.release()
+        # store list of generated input npy files for this video (may be empty if not processed)
+        try:
             file_list_dict[i] = input_name_list
+        except Exception:
+            # Manager dict may fail on some types; swallow to avoid crashing the subprocess
+            pass
         
 
     def load_preprocessed_data(self):

@@ -79,7 +79,7 @@ TEST:
     DATA_PATH: "/root/shared/czs/data" #"/data03/lk/rppg-toolbox/QHU_SPO2"                     # Raw dataset path, need to be updated
     FILE_LIST: "/root/jjt/file_list_new.csv"
     CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache"  # "/data03/lk/mxl/train"   # Processed dataset save path, need to be updated
-    VIDEO_TYPE: "RAW"  
+    VIDEO_TYPE: "RGB"  
     EXP_DATA_NAME: ""
     BEGIN: 0.85
     END: 1.0

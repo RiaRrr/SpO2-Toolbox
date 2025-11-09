@@ -44,203 +44,116 @@ class SPO2Loader(BaseLoader):
         """
         self.info = config_data.INFO
         print(data_path)
-
-        # Detect raw-on-the-fly mode: if user does not want preprocessing and
-        # the provided data_path contains the original Data/subject/vXX/ structure
-        # with video files and BVP.csv, enter raw mode and skip BaseLoader init.
-        self.raw_mode = False
-        try:
-            want_raw = (not config_data.DO_PREPROCESS)
-        except Exception:
-            want_raw = False
-
-        def _looks_like_raw_folder(p):
-            # detect at least one subject/vXX folder containing .avi and BVP.csv
-            try:
-                for subj in os.listdir(p):
-                    subj_p = os.path.join(p, subj)
-                    if not os.path.isdir(subj_p):
-                        continue
-                    for v in os.listdir(subj_p):
-                        v_p = os.path.join(subj_p, v)
-                        if not os.path.isdir(v_p):
-                            continue
-                        files = os.listdir(v_p)
-                        if any(f.lower().endswith('.avi') for f in files) and 'BVP.csv' in files:
-                            return True
-            except Exception:
-                return False
-            return False
-
-        if want_raw and _looks_like_raw_folder(data_path):
-            # initialize minimal attributes and build raw data index
-            self.raw_mode = True
-            self.inputs = []
-            self.labels = []
-            self.dataset_name = name
-            self.raw_data_path = data_path
-            self.cached_path = data_path
-            self.file_list_path = None
-            self.preprocessed_data_len = 0
-            self.data_format = config_data.DATA_FORMAT
-            self.do_preprocess = False
-            self.config_data = config_data
-
-            # Build raw data list using get_raw_data (which expects the THUS-style structure)
-            # Fallback: a more permissive scan if get_raw_data returns empty
-            try:
-                raw_dirs = self.get_raw_data(data_path)
-            except Exception:
-                raw_dirs = []
-                for subj in os.listdir(data_path):
-                    subj_p = os.path.join(data_path, subj)
-                    if not os.path.isdir(subj_p):
-                        continue
-                    for v in os.listdir(subj_p):
-                        v_p = os.path.join(subj_p, v)
-                        if not os.path.isdir(v_p):
-                            continue
-                        avi = None
-                        for f in os.listdir(v_p):
-                            if f.lower().endswith('.avi'):
-                                avi = os.path.join(v_p, f)
-                                break
-                        if avi and os.path.exists(os.path.join(v_p, 'BVP.csv')):
-                            raw_dirs.append({'index': v[1:] if v.startswith('v') else v,
-                                             'path': avi,
-                                             'subject': subj,
-                                             'type': 'face'})
-            self.raw_data_dirs = raw_dirs
-            print(f'Entering raw-on-the-fly mode: found {len(self.raw_data_dirs)} videos under {data_path}')
-            return
-
-        # default: use BaseLoader flow (cached / preprocessed mode)
-        print(data_path)
         super().__init__(name, data_path, config_data, device)
 
     def get_raw_data(self, data_path):
+        """Returns data directories in the specified path.
+
+        This implementation supports :
+        - If a CSV exists at self.file_list_path, interpret each row as a raw-entry
+          (either prefix like '070200_v01' or a relative/absolute path to the video file)
+          and map it to the expected data_dirs dicts.
         """
-        Returns data directories in the specified path (suitable for the THUSPO2 dataset).
-        Automatically detects all subject folders (e.g., 060200, 060201, 070200, 0602mn...).
-
-        Each subject folder should contain v01, v02... subfolders, which include:
-            - BVP.csv
-            - frames_timestamp.csv
-            - one or more .avi files
-        """
-        print(f"[SPO2Loader] Scanning raw data path: {data_path}")
-
-        # Prefer self.file_list_path if provided and exists; otherwise try a common fallback
-        candidate_csvs = []
-        if getattr(self, 'file_list_path', None):
-            candidate_csvs.append(self.file_list_path)
-        # legacy or user-provided fallback used in earlier iterations
-        candidate_csvs.append('/root/jjt/file_list_new.csv')
-
-        data_dirs = []
-
-        csv_used = None
-        for csv_path in candidate_csvs:
-            try:
-                if csv_path and os.path.exists(csv_path):
-                    file_list_df = pd.read_csv(csv_path)
-                    if 'file_path' in file_list_df.columns:
-                        inputs_temp = file_list_df['file_path'].astype(str).tolist()
-                        csv_used = csv_path
-                        # Resolve each entry: if absolute path use as-is, else join with data_path
-                        for p in inputs_temp:
-                            p = p.strip()
-                            if not p:
-                                continue
-                            if os.path.isabs(p):
-                                candidate = p
-                            else:
-                                candidate = os.path.join(data_path, p)
-
-                            # If candidate points directly to an avi file, use its parent dir
-                            if os.path.isfile(candidate) and candidate.lower().endswith('.avi'):
-                                data_dirs.append(os.path.dirname(candidate))
-                            # If candidate is a directory, use it
-                            elif os.path.isdir(candidate):
-                                data_dirs.append(candidate)
-                            else:
-                                # Try to glob the pattern under data_path
-                                glob_path = os.path.join(data_path, p)
-                                matches = glob.glob(glob_path)
-                                for m in matches:
-                                    if os.path.isdir(m):
-                                        data_dirs.append(m)
-                                    elif os.path.isfile(m) and m.lower().endswith('.avi'):
-                                        data_dirs.append(os.path.dirname(m))
-                    if data_dirs:
-                        break
-            except Exception:
-                continue
-
-        # If CSV didn't yield results, fallback to a permissive filesystem scan
-        if not data_dirs:
-            for subj in sorted(os.listdir(data_path)):
-                subj_p = os.path.join(data_path, subj)
-                if not os.path.isdir(subj_p):
-                    continue
-                for v in sorted(os.listdir(subj_p)):
-                    v_p = os.path.join(subj_p, v)
-                    if not os.path.isdir(v_p):
-                        continue
-                    files = os.listdir(v_p)
-                    if any(f.lower().endswith('.avi') for f in files) and 'BVP.csv' in files:
-                        data_dirs.append(v_p)
-
-        # Deduplicate and sort
-        data_dirs = sorted(list(dict.fromkeys(data_dirs)))
-
-        if not data_dirs:
-            raise ValueError(f"{self.dataset_name} Data path is empty or malformed! ({data_path})")
+        print(f"[SPO2Loader] get_raw_data scanning: {data_path}")
 
         dirs = []
 
-        # read user's preference for video type (e.g. 'RAW' or 'ZIP') and compare case-insensitively
-        video_type_config = getattr(self.config_data, 'VIDEO_TYPE', None)
-        video_type_upper = video_type_config.upper() if isinstance(video_type_config, str) else None
+        # 1) If user provided a raw-filelist under config (TRAIN.DATA.FILE_LIST), use it to pick which videos to process.
+        #    We only use the `file_path` column (relative or absolute paths) to select videos; we do NOT change
+        #    the canonical `file_list_path` used by the framework for writing generated lists.
+        filelist_cfg = None
+        try:
+            # config may expose FILE_LIST as a string path
+            filelist_cfg = getattr(self.config_data, 'FILE_LIST', None) or getattr(self.config_data, 'file_list', None)
+        except Exception:
+            filelist_cfg = None
 
-        for data_dir in data_dirs:
-            if not os.path.isdir(data_dir):
-                print(f"⚠️ Warning: {data_dir} is not a valid directory, skipping.")
-                continue
+        if filelist_cfg:
+            # resolve the filelist_cfg path (it may be relative to cwd or relative to data_path)
+            cand_paths = [filelist_cfg, os.path.join(data_path, filelist_cfg)]
+            filelist_path = None
+            for p in cand_paths:
+                if p and os.path.exists(p):
+                    filelist_path = p
+                    break
 
-            subject_name = os.path.basename(os.path.dirname(data_dir))
-            session = os.path.basename(data_dir)
-            items = os.listdir(data_dir)
-
-            # collect candidate videos in this directory
-            for item in items:
-                item_upper = item.upper()
-                if not item_upper.endswith('.AVI'):
-                    continue
-
-                # Basic, permissive type matching: prefer RAW/ZIP if requested, otherwise accept any .avi
-                if video_type_upper:
-                    if video_type_upper == 'RAW':
-                        if 'RAW' not in item_upper:
-                            continue
-                    elif video_type_upper == 'ZIP':
-                        if 'ZIP' not in item_upper:
-                            continue
+            if filelist_path:
+                try:
+                    df = pd.read_csv(filelist_path)
+                    # Prefer column named 'file_path' (user-provided). If missing, try first column.
+                    if 'file_path' in df.columns:
+                        col = 'file_path'
                     else:
-                        # if user provided arbitrary string, require it be contained in filename
-                        if video_type_upper not in item_upper:
+                        col = df.columns[0]
+
+                    for entry in df[col].astype(str).tolist():
+                        entry = entry.strip()
+                        if not entry:
                             continue
 
-                video_type = 'raw' if 'RAW' in item_upper else ('zip' if 'ZIP' in item_upper else 'other')
+                        # resolve entry to an absolute path under data_path if not absolute
+                        if os.path.isabs(entry):
+                            candidate = entry
+                        else:
+                            candidate = os.path.join(data_path, entry)
 
-                dirs.append({
-                    'index': session[1:] if session.startswith('v') else session,
-                    'path': os.path.join(data_dir, item),
-                    'subject': subject_name,
-                    'type': video_type
-                })
+                        # If candidate is a file, use it directly. If it's a directory, find an avi inside.
+                        if os.path.isfile(candidate):
+                            video_file = candidate
+                        elif os.path.isdir(candidate):
+                            video_dir = candidate
+                            avi_files = [f for f in os.listdir(video_dir) if f.lower().endswith('.avi')]
+                            if not avi_files:
+                                continue
+                            chosen = None
+                            for f in avi_files:
+                                if 'raw' in f.lower():
+                                    chosen = f
+                                    break
+                            if chosen is None:
+                                chosen = avi_files[0]
+                            video_file = os.path.join(video_dir, chosen)
+                        else:
+                            # try globbing
+                            matches = glob.glob(candidate)
+                            found = False
+                            for m in matches:
+                                if os.path.isdir(m):
+                                    video_dir = m
+                                    avi_files = [f for f in os.listdir(video_dir) if f.lower().endswith('.avi')]
+                                    if not avi_files:
+                                        continue
+                                    chosen = None
+                                    for f in avi_files:
+                                        if 'raw' in f.lower():
+                                            chosen = f
+                                            break
+                                    if chosen is None:
+                                        chosen = avi_files[0]
+                                    video_file = os.path.join(video_dir, chosen)
+                                    found = True
+                                    break
+                            if not found:
+                                continue
 
+                        # derive subject and session
+                        video_dir = os.path.dirname(video_file)
+                        session = os.path.basename(os.path.dirname(video_file))
+                        subj = os.path.basename(os.path.dirname(os.path.dirname(video_file)))
+                        dirs.append({
+                            'index': session[1:] if session.startswith('v') else session,
+                            'path': video_file,
+                            'subject': subj,
+                            'type': os.path.splitext(os.path.basename(video_file))[0].split('_')[-1].lower()
+                        })
+
+                    if dirs:
+                        return dirs
+                except Exception:
+                    # if reading user-provided filelist fails, fall through to existing behavior
+                    pass
         return dirs
+        
 
     def split_raw_data(self, data_dirs, begin, end):
         """Returns a subset of data dirs, split with begin and end values."""
@@ -304,70 +217,7 @@ class SPO2Loader(BaseLoader):
         bvp_timestamps, bvp_values = self.read_bvp(bvp_file)
 
         # Resample BVP data to match video frames
-        # Resampling can be expensive (interp). Skip resampling unless explicitly enabled.
-        try:
-            enable_resample = bool(self.config_data.PREPROCESS.ENABLE_RESAMPLE)
-        except Exception:
-            enable_resample = False
-
-        if enable_resample:
-            resampled_bvp = self.synchronize_and_resample(bvp_timestamps, bvp_values, frame_timestamps)
-        else:
-            # If lengths match, use raw bvp values, otherwise fallback to zeros matching frame count
-            try:
-                if bvp_values is not None and len(bvp_values) == len(frame_timestamps):
-                    resampled_bvp = bvp_values
-                else:
-                    resampled_bvp = np.zeros(len(frame_timestamps), dtype=np.float32)
-            except Exception:
-                resampled_bvp = np.zeros(len(frame_timestamps), dtype=np.float32)
-
-        # RR and SpO2 files may or may not exist in some recordings. Read if present.
-        rr_file = os.path.join(video_dir, "RR.csv")
-        spo2_file = os.path.join(video_dir, "SpO2.csv")
-        rr_timestamps = None
-        rr_values = None
-        spo2_values = None
-        if os.path.exists(rr_file):
-            try:
-                rr_df = pd.read_csv(rr_file)
-                # attempt to infer timestamp and rr column names
-                if 'timestamp' in rr_df.columns and 'rr' in rr_df.columns:
-                    rr_timestamps = rr_df['timestamp'].values
-                    rr_values = rr_df['rr'].values
-                else:
-                    # fallback: use first two numeric columns
-                    numeric_cols = rr_df.select_dtypes(include=[float, int]).columns.tolist()
-                    if len(numeric_cols) >= 2:
-                        rr_timestamps = rr_df[numeric_cols[0]].values
-                        rr_values = rr_df[numeric_cols[1]].values
-                    elif len(numeric_cols) == 1:
-                        rr_values = rr_df[numeric_cols[0]].values
-                        rr_timestamps = None
-                    else:
-                        rr_values = None
-                        rr_timestamps = None
-            except Exception:
-                print(f"⚠️ Failed to read RR file: {rr_file}. Continuing without RR.")
-                rr_timestamps = None
-                rr_values = None
-        else:
-            # Not all datasets include RR.csv — this is acceptable
-            # print a debug message for visibility
-            # (kept as print to avoid adding heavy logging dependencies here)
-            print(f"ℹ️ RR file not found for {video_dir}; continuing without RR.")
-
-        if os.path.exists(spo2_file):
-            try:
-                spo2_df = pd.read_csv(spo2_file)
-                # assume first numeric column is the SpO2 values
-                numeric_cols = spo2_df.select_dtypes(include=[float, int]).columns.tolist()
-                if len(numeric_cols) >= 1:
-                    spo2_values = spo2_df[numeric_cols[0]].values
-                else:
-                    spo2_values = None
-            except Exception:
-                print(f"⚠️ Failed to read SpO2 file: {spo2_file}. Ignoring SpO2 for this sample.")
+        resampled_bvp = self.synchronize_and_resample(bvp_timestamps, bvp_values, frame_timestamps)
 
         # Process frames, BVP signals, and SpO2 signals according to the configuration
         if config_preprocess.USE_PSUEDO_PPG_LABEL:
@@ -375,26 +225,20 @@ class SPO2Loader(BaseLoader):
         else:
             bvps = resampled_bvp
 
-        # Process and save regardless of filename content (do not require 'face' substring)
-        try:
+        # Label once here
+        if "face" in video_file:
             frames_clips, bvps_clips = self.preprocess(frames, bvps, config_preprocess)
             filename = f"{subject_id}_{experiment_id}"
             input_name_list, label_name_list = self.save_multi_process(frames_clips, bvps_clips, filename)
-            # write at least an empty list to the shared dict so caller can detect progress/failures
-            file_list_dict[i] = input_name_list if input_name_list is not None else []
-        except Exception as e:
-            # ensure the subprocess reports back an empty result on failure
-            print(f"⚠️ Preprocess failed for {video_file}: {e}")
-            file_list_dict[i] = []
+            file_list_dict[i] = input_name_list
         
 
     def load_preprocessed_data(self):
         """Load preprocessed data listed in the file list."""
 
         file_list_path = self.file_list_path   # Get file list path
-        file_list_path = "/root/jjt/file_list_new.csv"
         file_list_df = pd.read_csv(file_list_path)  # Read file list
-        inputs_temp = file_list_df['file_path'].tolist()  # Get input file list
+        inputs_temp = file_list_df['input_files'].tolist()  # Get input file list
         inputs_face = [] 
         
         # v01 v02 v03 v04 face configuration information
@@ -407,65 +251,6 @@ class SPO2Loader(BaseLoader):
         self.inputs = inputs_face    
         self.labels = labels_bvp
         self.preprocessed_data_len = len(inputs_face)
-        
-    def __len__(self):
-        # In raw-on-the-fly mode, length equals number of raw videos discovered
-        if getattr(self, 'raw_mode', False):
-            return len(self.raw_data_dirs)
-        return super().__len__()
-
-    def __getitem__(self, index):
-        # Raw-on-the-fly behaviour: read raw video + csvs, preprocess and return first chunk
-        if getattr(self, 'raw_mode', False):
-            entry = self.raw_data_dirs[index]
-            video_file = entry['path']
-            frames = self.read_video(video_file)
-            video_dir = os.path.dirname(video_file)
-
-            # timestamps and bvp
-            timestamp_file = os.path.join(video_dir, 'frames_timestamp.csv')
-            bvp_file = os.path.join(video_dir, 'BVP.csv')
-            frame_timestamps = None
-            try:
-                frame_timestamps = self.read_frame_timestamps(timestamp_file)
-            except Exception:
-                pass
-            bvp_timestamps, bvp_values = (None, None)
-            try:
-                bvp_timestamps, bvp_values = self.read_bvp(bvp_file)
-            except Exception:
-                pass
-
-            if frame_timestamps is not None and bvp_timestamps is not None and bvp_values is not None:
-                resampled_bvp = self.synchronize_and_resample(bvp_timestamps, bvp_values, frame_timestamps)
-            else:
-                # If timestamps missing, fall back to zeros with matching length
-                resampled_bvp = np.zeros(frames.shape[0], dtype=np.float32)
-
-            # Use preprocess settings provided by config (user may set DO_CHUNK=False, DO_CROP_FACE=False etc.)
-            frames_clips, bvps_clips = self.preprocess(frames, resampled_bvp, self.config_data.PREPROCESS)
-
-            # take first clip by default
-            data = frames_clips[0]
-            label = bvps_clips[0]
-
-            # align format with BaseLoader.__getitem__ expectations
-            if self.data_format == 'NDCHW':
-                data = np.transpose(data, (0, 3, 1, 2))
-            elif self.data_format == 'NCDHW':
-                data = np.transpose(data, (3, 0, 1, 2))
-            elif self.data_format == 'NDHWC':
-                pass
-
-            data = np.float32(data)
-            label = np.float32(label)
-
-            filename = f"{entry['subject']}_{entry['index']}"
-            chunk_id = '0'
-            return data, label, filename, chunk_id
-
-        return super().__getitem__(index)
-
 
     @staticmethod
     def read_bvp(bvp_file):
@@ -489,16 +274,14 @@ class SPO2Loader(BaseLoader):
         return resampled_data
 
     @staticmethod
-    def read_video(video_file, frame_skip=1):  # ← 每x帧取1帧
-        cap = cv2.VideoCapture(video_file)
+    def read_video(video_file):
+        """Reads a video file, returns frames."""
+        VidObj = cv2.VideoCapture(video_file)
+        VidObj.set(cv2.CAP_PROP_POS_MSEC, 0)
+        success, frame = VidObj.read()
         frames = []
-        i = 0
-        success, frame = cap.read()
         while success:
-            if i % frame_skip == 0:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frames.append(frame)
-            success, frame = cap.read()
-            i += 1
-        cap.release()
-        return np.array(frames, dtype=np.uint8)
+            frame = cv2.cvtColor(np.array(frame), cv2.COLOR_BGR2RGB)
+            frames.append(frame)
+            success, frame = VidObj.read()
+        return np.array(frames)

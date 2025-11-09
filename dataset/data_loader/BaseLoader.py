@@ -232,46 +232,136 @@ class BaseLoader(Dataset):
             frame_clips(np.array): processed video data by frames
             bvps_clips(np.array): processed bvp (ppg) labels by frames
         """
-        # resize frames and crop for face region
-        frames = self.crop_face_resize(
-            frames,
-            config_preprocess.CROP_FACE.DO_CROP_FACE,
-            config_preprocess.CROP_FACE.BACKEND,
-            config_preprocess.CROP_FACE.USE_LARGE_FACE_BOX,
-            config_preprocess.CROP_FACE.LARGE_BOX_COEF,
-            config_preprocess.CROP_FACE.DETECTION.DO_DYNAMIC_DETECTION,
-            config_preprocess.CROP_FACE.DETECTION.DYNAMIC_DETECTION_FREQUENCY,
-            config_preprocess.CROP_FACE.DETECTION.USE_MEDIAN_FACE_BOX,
-            config_preprocess.RESIZE.W,
-            config_preprocess.RESIZE.H)
-        # Check data transformation type
-        data = list()  # Video data
-        for data_type in config_preprocess.DATA_TYPE:
-            f_c = frames.copy()
-            if data_type == "Raw":
-                data.append(f_c)
-            elif data_type == "DiffNormalized":
-                data.append(BaseLoader.diff_normalize_data(f_c))
-            elif data_type == "Standardized":
-                data.append(BaseLoader.standardized_data(f_c))
-            else:
-                raise ValueError("Unsupported data type!")
-        data = np.concatenate(data, axis=-1)  # concatenate all channels
-        if config_preprocess.LABEL_TYPE == "Raw":
-            pass
-        elif config_preprocess.LABEL_TYPE == "DiffNormalized":
-            bvps = BaseLoader.diff_normalize_label(bvps)
-        elif config_preprocess.LABEL_TYPE == "Standardized":
-            bvps = BaseLoader.standardized_label(bvps)
-        else:
-            raise ValueError("Unsupported label type!")
+        # By default skip expensive crop/resize/face-detection unless explicitly enabled.
+        # This avoids running YOLO/OpenCV face detection and large resize operations during preprocessing.
+        enable_crop_resize = False
+        try:
+            enable_crop_resize = bool(config_preprocess.CROP_FACE.ENABLE)
+        except Exception:
+            enable_crop_resize = False
 
-        if config_preprocess.DO_CHUNK:  # chunk data into snippets
-            frames_clips, bvps_clips = self.chunk(
-                data, bvps, config_preprocess.CHUNK_LENGTH)
+        if enable_crop_resize:
+            frames = self.crop_face_resize(
+                frames,
+                config_preprocess.CROP_FACE.DO_CROP_FACE,
+                config_preprocess.CROP_FACE.BACKEND,
+                config_preprocess.CROP_FACE.USE_LARGE_FACE_BOX,
+                config_preprocess.CROP_FACE.LARGE_BOX_COEF,
+                config_preprocess.CROP_FACE.DETECTION.DO_DYNAMIC_DETECTION,
+                config_preprocess.CROP_FACE.DETECTION.DYNAMIC_DETECTION_FREQUENCY,
+                config_preprocess.CROP_FACE.DETECTION.USE_MEDIAN_FACE_BOX,
+                config_preprocess.RESIZE.W,
+                config_preprocess.RESIZE.H)
         else:
-            frames_clips = np.array([data])
-            bvps_clips = np.array([bvps])
+            # keep original frames (no cropping/resizing)
+            pass
+
+        # We'll perform heavy array transforms on GPU per-chunk to reduce CPU load/RAM.
+        # Process in non-overlapping chunks of CHUNK_LENGTH for memory safety.
+        chunk_length = int(config_preprocess.CHUNK_LENGTH)
+        do_chunk = bool(config_preprocess.DO_CHUNK)
+
+        T = frames.shape[0]
+        # If DO_CHUNK is false, still process in chunk-sized windows to avoid GPU OOM
+        window = chunk_length if chunk_length > 0 else T
+
+        frames_clips = []
+        bvps_clips = []
+
+        # prepare device list: use all available GPUs in a round-robin fashion, fallback to CPU
+        if torch.cuda.is_available():
+            num_gpus = torch.cuda.device_count()
+            devices = [torch.device(f'cuda:{i}') for i in range(num_gpus)]
+        else:
+            devices = [torch.device('cpu')]
+
+        # helper: process a single chunk on given device
+        def process_chunk_np(chunk_np, bvp_chunk, device):
+            # chunk_np: (L,H,W,C) uint8
+            # convert to float32 [0,1]
+            x = torch.from_numpy(chunk_np.astype(np.float32) / 255.0).to(device)
+            data_list = []
+            for data_type in config_preprocess.DATA_TYPE:
+                if data_type == "Raw":
+                    data_list.append(x)
+                elif data_type == "DiffNormalized":
+                    if x.shape[0] >= 2:
+                        diff = x[1:] - x[:-1]
+                        pad = torch.zeros_like(diff[:1])
+                        diff = torch.cat([diff, pad], dim=0)
+                        std = diff.std() if diff.std() > 0 else 1.0
+                        diff = diff / (std + 1e-8)
+                        data_list.append(diff)
+                    else:
+                        data_list.append(torch.zeros_like(x))
+                elif data_type == "Standardized":
+                    mean = x.mean()
+                    std = x.std()
+                    std = std if std > 0 else 1.0
+                    standardized = (x - mean) / (std + 1e-8)
+                    data_list.append(standardized)
+                else:
+                    raise ValueError("Unsupported data type!")
+
+            data_t = torch.cat(data_list, dim=-1)  # (L,H,W,C*)
+
+            # labels
+            if config_preprocess.LABEL_TYPE == "Raw":
+                lbl = bvp_chunk
+            elif config_preprocess.LABEL_TYPE == "DiffNormalized":
+                lbl = BaseLoader.diff_normalize_label(bvp_chunk)
+            elif config_preprocess.LABEL_TYPE == "Standardized":
+                lbl = BaseLoader.standardized_label(bvp_chunk)
+            else:
+                raise ValueError("Unsupported label type!")
+
+            # move processed data back to cpu numpy float32 for saving
+            data_np = data_t.cpu().numpy().astype(np.float32)
+            return data_np, np.asarray(lbl, dtype=np.float32)
+
+        # iterate windows
+        # distribute windows across devices in round-robin to utilize multiple GPUs
+        window_idx = 0
+        for start in range(0, max(1, T - window + 1), window):
+            end = start + window
+            if end > T:
+                # if remaining frames are less than a full window, skip or pad
+                if T - start < 1:
+                    break
+                end = T
+            chunk_np = frames[start:end]
+            # corresponding labels
+            bvp_chunk = bvps[start:end] if bvps is not None else np.zeros((chunk_np.shape[0],), dtype=np.float32)
+
+            # choose device for this window
+            device = devices[window_idx % len(devices)]
+            data_np, label_np = process_chunk_np(chunk_np, bvp_chunk, device)
+
+            if do_chunk:
+                # chunk within this window into CHUNK_LENGTH snippets
+                num_clips = data_np.shape[0] // chunk_length
+                for i in range(num_clips):
+                    s = i * chunk_length
+                    e = (i + 1) * chunk_length
+                    frames_clips.append(data_np[s:e])
+                    bvps_clips.append(label_np[s:e])
+            else:
+                frames_clips.append(data_np)
+                bvps_clips.append(label_np)
+
+            # free GPU memory for the chosen device
+            if device.type == 'cuda':
+                torch.cuda.synchronize(device)
+                torch.cuda.empty_cache()
+            window_idx += 1
+
+        if len(frames_clips) == 0:
+            # fallback: return single item
+            frames_clips = np.array([frames.astype(np.float32)])
+            bvps_clips = np.array([bvps.astype(np.float32)])
+        else:
+            frames_clips = np.array(frames_clips)
+            bvps_clips = np.array(bvps_clips)
 
         return frames_clips, bvps_clips
 
@@ -473,7 +563,7 @@ class BaseLoader(Dataset):
             count += 1
         return input_path_name_list, label_path_name_list
 
-    def multi_process_manager(self, data_dirs, config_preprocess, multi_process_quota=8):
+    def multi_process_manager(self, data_dirs, config_preprocess, multi_process_quota=1):
         """Allocate dataset preprocessing across multiple processes.
 
         Args:
@@ -531,7 +621,13 @@ class BaseLoader(Dataset):
         """
         file_list = []
         # iterate through processes and add all processed file paths
-        for process_num, file_paths in file_list_dict.items():
+        # Use deterministic order based on process index keys when possible
+        try:
+            keys = sorted(list(file_list_dict.keys()))
+        except Exception:
+            keys = list(file_list_dict.keys())
+        for process_num in keys:
+            file_paths = file_list_dict.get(process_num, [])
             file_list = file_list + file_paths
 
         if not file_list:

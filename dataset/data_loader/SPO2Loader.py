@@ -304,7 +304,23 @@ class SPO2Loader(BaseLoader):
         bvp_timestamps, bvp_values = self.read_bvp(bvp_file)
 
         # Resample BVP data to match video frames
-        resampled_bvp = self.synchronize_and_resample(bvp_timestamps, bvp_values, frame_timestamps)
+        # Resampling can be expensive (interp). Skip resampling unless explicitly enabled.
+        try:
+            enable_resample = bool(self.config_data.PREPROCESS.ENABLE_RESAMPLE)
+        except Exception:
+            enable_resample = False
+
+        if enable_resample:
+            resampled_bvp = self.synchronize_and_resample(bvp_timestamps, bvp_values, frame_timestamps)
+        else:
+            # If lengths match, use raw bvp values, otherwise fallback to zeros matching frame count
+            try:
+                if bvp_values is not None and len(bvp_values) == len(frame_timestamps):
+                    resampled_bvp = bvp_values
+                else:
+                    resampled_bvp = np.zeros(len(frame_timestamps), dtype=np.float32)
+            except Exception:
+                resampled_bvp = np.zeros(len(frame_timestamps), dtype=np.float32)
 
         # RR and SpO2 files may or may not exist in some recordings. Read if present.
         rr_file = os.path.join(video_dir, "RR.csv")

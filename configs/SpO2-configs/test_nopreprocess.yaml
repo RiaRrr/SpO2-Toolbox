@@ -35,10 +35,7 @@ TRAIN:
           DYNAMIC_DETECTION_FREQUENCY: 32
           USE_MEDIAN_FACE_BOX: False    # This should be used ONLY if dynamic detection is used
       RESIZE:
-        H:         export OMP_NUM_THREADS=1
-        export MKL_NUM_THREADS=1
-        export OPENBLAS_NUM_THREADS=1
-        export NUMEXPR_NUM_THREADS=1
+        H: 72
         W: 72
 VALID:
   DATA:

@@ -70,6 +70,8 @@ class PhysFormerTrainer(BaseTrainer):
             # a step_size that doesn't end up changing the LR always seems to be used. This seems to defeat the point
             # of using StepLR in the first place. Consider investigating and using another approach (e.g., OneCycleLR).
             self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=50, gamma=0.5)
+            # Initialize unified CSV logging file (train + valid + test)
+            self._init_csv_logger()
         elif config.TOOLBOX_MODE == "only_test":
             self.chunk_len = config.TEST.DATA.PREPROCESS.CHUNK_LENGTH
             self.model = ViT_ST_ST_Compact3_TDC_gra_sharp(
@@ -78,6 +80,7 @@ class PhysFormerTrainer(BaseTrainer):
                 dropout_rate=self.dropout_rate, theta=self.theta).to(self.device)
             if self.device_ids:
                 self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)
+            self._init_csv_logger()  # still create file in only_test mode so test metrics append
         else:
             raise ValueError("Physformer trainer initialized in incorrect toolbox mode!")
 
@@ -100,6 +103,7 @@ class PhysFormerTrainer(BaseTrainer):
             print(f"WARN: falling back to default device list due to: {e}")
             # best-effort fallback to original behavior
             return list(range(int(self.num_of_gpu)))
+
 
     def train(self, data_loader):
         """Training routine for model"""
@@ -179,6 +183,20 @@ class PhysFormerTrainer(BaseTrainer):
                         f'lr:0.0001, sharp:{gra_sharp:.3f}, a:{a:.3f}, NegPearson:{np.mean(loss_rPPG_avg[-2000:]):.4f}, '
                         f'\nb:{b:.3f}, kl:{np.mean(loss_kl_avg_test[-2000:]):.3f}, fre_CEloss:{np.mean(loss_peak_avg[-2000:]):.3f}, '
                         f'hr_mae:{np.mean(loss_hr_mae[-2000:]):.3f}')
+                # Append per-batch training metrics row
+                self._append_csv_row({
+                    'mode':'train',
+                    'epoch':epoch,
+                    'batch':idx+1,
+                    'lr':self.scheduler.get_last_lr()[0] if hasattr(self.scheduler,'get_last_lr') else '',
+                    'a_coeff':a,
+                    'b_coeff':b,
+                    'sharp':gra_sharp,
+                    'NegPearson':float(loss_rPPG.data),
+                    'fre_CEloss':float(fre_loss.data),
+                    'kl_loss':float(kl_loss.data),
+                    'hr_mae':float(train_mae),
+                })
                     
             # Append the current learning rate to the list
             lrs.append(self.scheduler.get_last_lr())
@@ -200,9 +218,23 @@ class PhysFormerTrainer(BaseTrainer):
                     self.min_valid_loss = valid_loss
                     self.best_epoch = epoch
                     print("Update best model! Best epoch: {}".format(self.best_epoch))
+                # Append validation row
+                self._append_csv_row({
+                    'mode':'valid',
+                    'epoch':epoch,
+                    'batch':idx+1,
+                    'valid_loss':valid_loss,
+                    'best_epoch_so_far':self.best_epoch,
+                    'min_valid_loss':self.min_valid_loss,
+                })
         if not self.config.TEST.USE_LAST_EPOCH: 
             print("best trained epoch: {}, min_val_loss: {}".format(
                 self.best_epoch, self.min_valid_loss))
+            self._append_csv_row({
+                'mode':'valid_summary',
+                'epoch':self.best_epoch,
+                'min_valid_loss':self.min_valid_loss,
+            })
         if self.config.TRAIN.PLOT_LOSSES_AND_LR:
             self.plot_losses_and_lrs(mean_training_losses, mean_valid_losses, lrs, self.config)
 
@@ -280,7 +312,17 @@ class PhysFormerTrainer(BaseTrainer):
                     labels[subj_index][sort_index] = label[idx]
 
         print('')
-        calculate_metrics(predictions, labels, self.config)
+        metrics_dict = calculate_metrics(predictions, labels, self.config)  # now returns metrics
+        # Append test metrics rows (one consolidated row)
+        if isinstance(metrics_dict, dict) and metrics_dict:
+            test_epoch_used = None
+            if self.config.TOOLBOX_MODE == 'train_and_test':
+                test_epoch_used = self.best_epoch if not self.config.TEST.USE_LAST_EPOCH else (self.max_epoch_num - 1)
+            self._append_csv_row({
+                'mode':'test',
+                'epoch':test_epoch_used,
+                **{k:v for k,v in metrics_dict.items() if k in ['MAE','RMSE','MAPE','Pearson','SNR','MACC']}
+            })
         if self.config.TEST.OUTPUT_SAVE_DIR: # saving test outputs
             self.save_test_outputs(predictions, labels, self.config)
 

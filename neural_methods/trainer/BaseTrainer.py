@@ -3,6 +3,7 @@ from torch.autograd import Variable
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter, MaxNLocator
 import os
+import csv
 import pickle
 
 
@@ -15,7 +16,50 @@ class BaseTrainer:
         return parser
 
     def __init__(self):
-        pass
+        # CSV unified logger path; set by _init_csv_logger if environment is configured
+        self.csv_path = None
+        self._csv_header_written = False
+        self._csv_columns = [
+            'mode','epoch','batch','lr','a_coeff','b_coeff','sharp',
+            'NegPearson','fre_CEloss','kl_loss','hr_mae','loss',
+            'valid_loss','best_epoch_so_far','min_valid_loss',
+            'MAE','RMSE','MAPE','Pearson','SNR','MACC',
+            # Extended (multi-task / auxiliary)
+            'AU_AvgF1','AU_AvgPrec','AU_AvgAcc',
+            'Resp_MAE','Resp_RMSE','Resp_MAPE','Resp_Pearson','Resp_SNR'
+        ]
+
+    def _init_csv_logger(self):
+        """Prepare a unified CSV file capturing train/valid/test metrics for the current run.
+        Requires main to have set SPO2_LOG_DIR and SPO2_RUN_TS.
+        """
+        try:
+            log_dir = os.environ.get('SPO2_LOG_DIR')
+            run_ts = os.environ.get('SPO2_RUN_TS')
+            if not log_dir or not run_ts:
+                return
+            self.csv_path = os.path.join(log_dir, f"test_result_{run_ts}.csv")
+            header_exists = os.path.exists(self.csv_path) and os.path.getsize(self.csv_path) > 0
+            if not header_exists:
+                with open(self.csv_path, 'w', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=self._csv_columns)
+                    writer.writeheader()
+            self._csv_header_written = True
+        except Exception as e:
+            print(f"WARN: CSV logger init failed: {e}")
+            self.csv_path = None
+
+    def _append_csv_row(self, row_dict):
+        """Append a row to the unified CSV if initialized. Missing columns are filled with blanks."""
+        if not self.csv_path:
+            return
+        try:
+            row = {c: row_dict.get(c, '') for c in self._csv_columns}
+            with open(self.csv_path, 'a', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=self._csv_columns)
+                writer.writerow(row)
+        except Exception as e:
+            print(f"WARN: failed to append CSV row: {e}")
 
     def train(self, data_loader):
         pass

@@ -21,6 +21,7 @@ class FactorizePhysTrainer(BaseTrainer):
     def __init__(self, config, data_loader):
         """Inits parameters from args and the writer for TensorboardX."""
         super().__init__()
+        self.config = config
         self.max_epoch_num = config.TRAIN.EPOCHS
         self.model_dir = config.MODEL.MODEL_DIR
         self.model_file_name = config.TRAIN.MODEL_FILE_NAME
@@ -28,9 +29,10 @@ class FactorizePhysTrainer(BaseTrainer):
         self.num_of_gpu = config.NUM_OF_GPU_TRAIN
         self.dropout_rate = config.MODEL.DROP_RATE
         self.base_len = self.num_of_gpu
-        self.config = config
         self.min_valid_loss = None
         self.best_epoch = 0
+        # Initialize unified CSV logger
+        self._init_csv_logger()
 
         if torch.cuda.is_available() and config.NUM_OF_GPU_TRAIN > 0:
             dev_list = [int(d) for d in config.DEVICE.replace("cuda:", "").split(",")]
@@ -152,6 +154,12 @@ class FactorizePhysTrainer(BaseTrainer):
                     tbar.set_postfix({"appx_error": appx_error.item()}, loss=loss.item())
                 else:
                     tbar.set_postfix(loss=loss.item())
+                # CSV per-batch
+                self._append_csv_row({
+                    'mode':'train','epoch':epoch,'batch':idx+1,
+                    'lr': self.scheduler.get_last_lr()[0] if hasattr(self.scheduler,'get_last_lr') else '',
+                    'loss': float(loss.item())
+                })
 
             # Append the mean training loss for the epoch
             mean_training_losses.append(np.mean(train_loss))
@@ -167,6 +175,7 @@ class FactorizePhysTrainer(BaseTrainer):
                 valid_loss = self.valid(data_loader)
                 mean_valid_losses.append(valid_loss)
                 print('validation loss: ', valid_loss)
+                self._append_csv_row({'mode':'valid','epoch':epoch,'batch':idx+1,'valid_loss':valid_loss})
                 if self.min_valid_loss is None:
                     self.min_valid_loss = valid_loss
                     self.best_epoch = epoch
@@ -178,6 +187,7 @@ class FactorizePhysTrainer(BaseTrainer):
         if not self.config.TEST.USE_LAST_EPOCH: 
             print("best trained epoch: {}, min_val_loss: {}".format(
                 self.best_epoch, self.min_valid_loss))
+            self._append_csv_row({'mode':'valid_summary','epoch':self.best_epoch,'min_valid_loss':self.min_valid_loss})
         if self.config.TRAIN.PLOT_LOSSES_AND_LR:
             self.plot_losses_and_lrs(mean_training_losses, mean_valid_losses, lrs, self.config)
 
@@ -299,7 +309,12 @@ class FactorizePhysTrainer(BaseTrainer):
 
 
         print('')
-        calculate_metrics(predictions, labels, self.config)
+        metrics_dict = calculate_metrics(predictions, labels, self.config)
+        if isinstance(metrics_dict, dict) and metrics_dict:
+            test_epoch_used = None
+            if self.config.TOOLBOX_MODE == 'train_and_test':
+                test_epoch_used = self.best_epoch if not self.config.TEST.USE_LAST_EPOCH else (self.max_epoch_num - 1)
+            self._append_csv_row({'mode':'test','epoch':test_epoch_used, **{k:v for k,v in metrics_dict.items() if k in ['MAE','RMSE','MAPE','Pearson','SNR','MACC']}})
         if self.config.TEST.OUTPUT_SAVE_DIR: # saving test outputs 
             self.save_test_outputs(predictions, labels, self.config)
 

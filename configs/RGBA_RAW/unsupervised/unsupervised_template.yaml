@@ -1,16 +1,16 @@
 BASE: ['']
 TOOLBOX_MODE: "unsupervised_method"      # "train_and_test"  or "only_test" or "unsupervised_method"
 UNSUPERVISED:
-  METHOD: ["POS"]
+  METHOD: ["ICA", "POS", "CHROM", "GREEN", "LGI", "PBV", "OMIT"]
   METRICS: ['MAE', 'RMSE', 'MAPE', 'Pearson', 'SNR', 'BA']
   DATA:
     FS: 30
     DATASET: SPO2
-    DO_PREPROCESS: False               # if first time, should be true
+    DO_PREPROCESS: True               # if first time, should be true
     DATA_FORMAT: NDHWC
     DATA_PATH: "/root/shared/SpO2-Dataset"  
     FILE_LIST: "/root/jjt/file_list_new.csv"
-    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/unsupervised/"
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/unsupervised/""
     VIDEO_TYPE: "RGBA_ROI"
     EXP_DATA_NAME: ""
     BEGIN: 0.0

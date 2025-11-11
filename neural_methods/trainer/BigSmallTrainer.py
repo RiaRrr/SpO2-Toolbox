@@ -113,8 +113,17 @@ class BigSmallTrainer(BaseTrainer):
         self.using_TSM = True
         self.model = self.define_model(config) # define the model
 
+        # Unified CSV logger init
+        self._init_csv_logger()
+
         if torch.cuda.device_count() > 1 and config.NUM_OF_GPU_TRAIN > 1: # distribute model across GPUs
-            self.model = torch.nn.DataParallel(self.model, device_ids=list(range(config.NUM_OF_GPU_TRAIN))) # data parallel model
+            # Contiguous GPU selection starting at DEVICE index
+            device_ids = None
+            if isinstance(self.device, torch.device) and self.device.type == 'cuda':
+                base_idx = self.device.index if self.device.index is not None else 0
+                device_ids = list(range(base_idx, base_idx + config.NUM_OF_GPU_TRAIN))
+            if device_ids:
+                self.model = torch.nn.DataParallel(self.model, device_ids=device_ids) # data parallel model
 
         self.model = self.model.to(self.device) # send model to primary GPU
 
@@ -257,6 +266,12 @@ class BigSmallTrainer(BaseTrainer):
 
                  
                 tbar.set_postfix({"loss:": loss.item(), "lr:": self.optimizer.param_groups[0]["lr"]})
+                # CSV per-batch
+                self._append_csv_row({
+                    'mode':'train','epoch':epoch,'batch':idx+1,
+                    'lr': self.optimizer.param_groups[0]['lr'],
+                    'loss': float(loss.item())
+                })
 
             # APPEND EPOCH LOSS LIST TO TRAINING LOSS DICTIONARY
             train_loss_dict[epoch] = train_loss
@@ -283,6 +298,7 @@ class BigSmallTrainer(BaseTrainer):
                 val_bvp_loss_dict[epoch] = valid_bvp_loss
                 val_resp_loss_dict[epoch] = valid_resp_loss
                 print('validation loss: ', valid_loss)
+                self._append_csv_row({'mode':'valid','epoch':epoch,'batch':idx+1,'valid_loss':valid_loss})
 
                 # Update used model
                 if self.model_to_use == 'best_epoch' and (valid_loss < min_valid_loss):
@@ -303,6 +319,8 @@ class BigSmallTrainer(BaseTrainer):
 
         # PRINT MODEL TO BE USED FOR TESTING
         print("Used model trained epoch:{}, val_loss:{}".format(self.used_epoch, min_valid_loss))
+        if not self.config.TEST.USE_LAST_EPOCH:
+            self._append_csv_row({'mode':'valid_summary','epoch':self.used_epoch,'min_valid_loss':min_valid_loss})
         print('')
 
 
@@ -478,6 +496,25 @@ class BigSmallTrainer(BaseTrainer):
         bvp_metric_dict = calculate_bvp_metrics(preds_dict_bvp, labels_dict_bvp, self.config)
         resp_metric_dict = calculate_resp_metrics(preds_dict_resp, labels_dict_resp, self.config)
         au_metric_dict = calculate_bp4d_au_metrics(preds_dict_au, labels_dict_au, self.config)
+
+        # Unified CSV test row combining available metrics
+        combined = {}
+        # BVP metrics mapping
+        for k in ['MAE','RMSE','MAPE','Pearson','SNR','MACC']:
+            if k in bvp_metric_dict: combined[k] = bvp_metric_dict[k]
+        # Resp metrics mapping
+        resp_map = {
+            'Resp_MAE':'MAE','Resp_RMSE':'RMSE','Resp_MAPE':'MAPE','Resp_Pearson':'Pearson','Resp_SNR':'SNR'
+        }
+        for out_k, src_k in resp_map.items():
+            if src_k in resp_metric_dict: combined[out_k] = resp_metric_dict[src_k]
+        # AU metrics mapping (AvgF1, AvgPrec, AvgAcc if present)
+        au_map = {
+            'AU_AvgF1':'AvgF1','AU_AvgPrec':'AvgPrec','AU_AvgAcc':'AvgAcc'
+        }
+        for out_k, src_k in au_map.items():
+            if src_k in au_metric_dict: combined[out_k] = au_metric_dict[src_k]
+        self._append_csv_row({'mode':'test','epoch':self.used_epoch, **combined})
 
         
 

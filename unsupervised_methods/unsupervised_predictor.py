@@ -1,4 +1,6 @@
-"""Unsupervised learning methods including POS, GREEN, CHROME, ICA, LGI and PBV."""
+"""Unsupervised learning methods including POS, GREEN, CHROME, ICA, LGI, PBV, OMIT.
+Adds unified CSV logging rows (mode=unsupervised) if run environment exposes SPO2_LOG_DIR/SPO2_RUN_TS.
+"""
 import numpy as np
 from evaluation.post_process import *
 from unsupervised_methods.methods.CHROME_DEHAAN import *
@@ -9,7 +11,31 @@ from unsupervised_methods.methods.PBV import *
 from unsupervised_methods.methods.POS_WANG import *
 from unsupervised_methods.methods.OMIT import *
 from tqdm import tqdm
+import os, csv
 from evaluation.BlandAltmanPy import BlandAltman
+
+def _append_unsupervised_csv_row(row_dict):
+    """Append a row to the unified CSV (test_result_{timestamp}.csv) if env vars are set."""
+    log_dir = os.environ.get('SPO2_LOG_DIR')
+    run_ts = os.environ.get('SPO2_RUN_TS')
+    if not log_dir or not run_ts:
+        return
+    csv_path = os.path.join(log_dir, f"test_result_{run_ts}.csv")
+    columns = [
+        'mode','method','window_index','MAE','RMSE','MAPE','Pearson','SNR','MACC'
+    ]
+    # Create header if missing
+    need_header = not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0
+    try:
+        with open(csv_path,'a',newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=columns)
+            if need_header:
+                writer.writeheader()
+            # ensure only known columns
+            row = {c: row_dict.get(c,'') for c in columns}
+            writer.writerow(row)
+    except Exception as e:
+        print(f"WARN: failed to append unsupervised CSV row: {e}")
 
 def unsupervised_predict(config, data_loader, method_name):
     """ Model evaluation on the testing dataset."""
@@ -91,11 +117,14 @@ def unsupervised_predict(config, data_loader, method_name):
         SNR_all = np.array(SNR_all)
         MACC_all = np.array(MACC_all)
         num_test_samples = len(predict_hr_peak_all)
+        # Accumulate metrics dict for CSV output
+        metrics_dict = {}
         for metric in config.UNSUPERVISED.METRICS:
             if metric == "MAE":
                 MAE_PEAK = np.mean(np.abs(predict_hr_peak_all - gt_hr_peak_all))
                 standard_error = np.std(np.abs(predict_hr_peak_all - gt_hr_peak_all)) / np.sqrt(num_test_samples)
                 print("Peak MAE (Peak Label): {0} +/- {1}".format(MAE_PEAK, standard_error))
+                metrics_dict['MAE'] = float(MAE_PEAK)
             elif metric == "RMSE":
                 # Calculate the squared errors, then RMSE, in order to allow
                 # for a more robust and intuitive standard error that won't
@@ -104,23 +133,28 @@ def unsupervised_predict(config, data_loader, method_name):
                 RMSE_PEAK = np.sqrt(np.mean(squared_errors))
                 standard_error = np.sqrt(np.std(squared_errors) / np.sqrt(num_test_samples))
                 print("PEAK RMSE (Peak Label): {0} +/- {1}".format(RMSE_PEAK, standard_error))
+                metrics_dict['RMSE'] = float(RMSE_PEAK)
             elif metric == "MAPE":
                 MAPE_PEAK = np.mean(np.abs((predict_hr_peak_all - gt_hr_peak_all) / gt_hr_peak_all)) * 100
                 standard_error = np.std(np.abs((predict_hr_peak_all - gt_hr_peak_all) / gt_hr_peak_all)) / np.sqrt(num_test_samples) * 100
                 print("PEAK MAPE (Peak Label): {0} +/- {1}".format(MAPE_PEAK, standard_error))
+                metrics_dict['MAPE'] = float(MAPE_PEAK)
             elif metric == "Pearson":
                 Pearson_PEAK = np.corrcoef(predict_hr_peak_all, gt_hr_peak_all)
                 correlation_coefficient = Pearson_PEAK[0][1]
                 standard_error = np.sqrt((1 - correlation_coefficient**2) / (num_test_samples - 2))
                 print("PEAK Pearson (Peak Label): {0} +/- {1}".format(correlation_coefficient, standard_error))
+                metrics_dict['Pearson'] = float(correlation_coefficient)
             elif metric == "SNR":
                 SNR_FFT = np.mean(SNR_all)
                 standard_error = np.std(SNR_all) / np.sqrt(num_test_samples)
                 print("FFT SNR (FFT Label): {0} +/- {1} (dB)".format(SNR_FFT, standard_error))
+                metrics_dict['SNR'] = float(SNR_FFT)
             elif metric == "MACC":
                 MACC_avg = np.mean(MACC_all)
                 standard_error = np.std(MACC_all) / np.sqrt(num_test_samples)
                 print("MACC (avg): {0} +/- {1}".format(MACC_avg, standard_error))
+                metrics_dict['MACC'] = float(MACC_avg)
             elif "BA" in metric:
                 compare = BlandAltman(gt_hr_peak_all, predict_hr_peak_all, config, averaged=True)
                 compare.scatter_plot(
@@ -143,11 +177,13 @@ def unsupervised_predict(config, data_loader, method_name):
         SNR_all = np.array(SNR_all)
         MACC_all = np.array(MACC_all)
         num_test_samples = len(predict_hr_fft_all)
+        metrics_dict = {}
         for metric in config.UNSUPERVISED.METRICS:
             if metric == "MAE":
                 MAE_FFT = np.mean(np.abs(predict_hr_fft_all - gt_hr_fft_all))
                 standard_error = np.std(np.abs(predict_hr_fft_all - gt_hr_fft_all)) / np.sqrt(num_test_samples)
                 print("FFT MAE (FFT Label): {0} +/- {1}".format(MAE_FFT, standard_error))
+                metrics_dict['MAE'] = float(MAE_FFT)
             elif metric == "RMSE":
                 # Calculate the squared errors, then RMSE, in order to allow
                 # for a more robust and intuitive standard error that won't
@@ -156,23 +192,28 @@ def unsupervised_predict(config, data_loader, method_name):
                 RMSE_FFT = np.sqrt(np.mean(squared_errors))
                 standard_error = np.sqrt(np.std(squared_errors) / np.sqrt(num_test_samples))
                 print("FFT RMSE (FFT Label): {0} +/- {1}".format(RMSE_FFT, standard_error))
+                metrics_dict['RMSE'] = float(RMSE_FFT)
             elif metric == "MAPE":
                 MAPE_FFT = np.mean(np.abs((predict_hr_fft_all - gt_hr_fft_all) / gt_hr_fft_all)) * 100
                 standard_error = np.std(np.abs((predict_hr_fft_all - gt_hr_fft_all) / gt_hr_fft_all)) / np.sqrt(num_test_samples) * 100
                 print("FFT MAPE (FFT Label): {0} +/- {1}".format(MAPE_FFT, standard_error))
+                metrics_dict['MAPE'] = float(MAPE_FFT)
             elif metric == "Pearson":
                 Pearson_FFT = np.corrcoef(predict_hr_fft_all, gt_hr_fft_all)
                 correlation_coefficient = Pearson_FFT[0][1]
                 standard_error = np.sqrt((1 - correlation_coefficient**2) / (num_test_samples - 2))
                 print("FFT Pearson (FFT Label): {0} +/- {1}".format(correlation_coefficient, standard_error))
+                metrics_dict['Pearson'] = float(correlation_coefficient)
             elif metric == "SNR":
                 SNR_PEAK = np.mean(SNR_all)
                 standard_error = np.std(SNR_all) / np.sqrt(num_test_samples)
                 print("FFT SNR (FFT Label): {0} +/- {1} (dB)".format(SNR_PEAK, standard_error))
+                metrics_dict['SNR'] = float(SNR_PEAK)
             elif metric == "MACC":
                 MACC_avg = np.mean(MACC_all)
                 standard_error = np.std(MACC_all) / np.sqrt(num_test_samples)
                 print("MACC (avg): {0} +/- {1}".format(MACC_avg, standard_error))
+                metrics_dict['MACC'] = float(MACC_avg)
             elif "BA" in metric:
                 compare = BlandAltman(gt_hr_fft_all, predict_hr_fft_all, config, averaged=True)
                 compare.scatter_plot(
@@ -191,3 +232,11 @@ def unsupervised_predict(config, data_loader, method_name):
                 raise ValueError("Wrong Test Metric Type")
     else:
         raise ValueError("Inference evaluation method name wrong!")
+    # Append consolidated row for this method
+    if metrics_dict:
+        _append_unsupervised_csv_row({
+            'mode':'unsupervised',
+            'method':method_name,
+            'window_index':'all',
+            **metrics_dict
+        })

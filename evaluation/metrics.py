@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 import torch
@@ -111,11 +112,14 @@ def calculate_metrics(predictions, labels, config):
         SNR_all = np.array(SNR_all)
         MACC_all = np.array(MACC_all)
         num_test_samples = len(predict_hr_fft_all)
+        # Collect metrics for CSV
+        csv_metrics = {}
         for metric in config.TEST.METRICS:
             if metric == "MAE":
                 MAE_FFT = np.mean(np.abs(predict_hr_fft_all - gt_hr_fft_all))
                 standard_error = np.std(np.abs(predict_hr_fft_all - gt_hr_fft_all)) / np.sqrt(num_test_samples)
                 print("FFT MAE (FFT Label): {0} +/- {1}".format(MAE_FFT, standard_error))
+                csv_metrics["MAE"] = float(MAE_FFT)
             elif metric == "RMSE":
                 # Calculate the squared errors, then RMSE, in order to allow
                 # for a more robust and intuitive standard error that won't
@@ -124,23 +128,28 @@ def calculate_metrics(predictions, labels, config):
                 RMSE_FFT = np.sqrt(np.mean(squared_errors))
                 standard_error = np.sqrt(np.std(squared_errors) / np.sqrt(num_test_samples))
                 print("FFT RMSE (FFT Label): {0} +/- {1}".format(RMSE_FFT, standard_error))
+                csv_metrics["RMSE"] = float(RMSE_FFT)
             elif metric == "MAPE":
                 MAPE_FFT = np.mean(np.abs((predict_hr_fft_all - gt_hr_fft_all) / gt_hr_fft_all)) * 100
                 standard_error = np.std(np.abs((predict_hr_fft_all - gt_hr_fft_all) / gt_hr_fft_all)) / np.sqrt(num_test_samples) * 100
                 print("FFT MAPE (FFT Label): {0} +/- {1}".format(MAPE_FFT, standard_error))
+                csv_metrics["MAPE"] = float(MAPE_FFT)
             elif metric == "Pearson":
                 Pearson_FFT = np.corrcoef(predict_hr_fft_all, gt_hr_fft_all)
                 correlation_coefficient = Pearson_FFT[0][1]
                 standard_error = np.sqrt((1 - correlation_coefficient**2) / (num_test_samples - 2))
                 print("FFT Pearson (FFT Label): {0} +/- {1}".format(correlation_coefficient, standard_error))
+                csv_metrics["Pearson"] = float(correlation_coefficient)
             elif metric == "SNR":
                 SNR_FFT = np.mean(SNR_all)
                 standard_error = np.std(SNR_all) / np.sqrt(num_test_samples)
                 print("FFT SNR (FFT Label): {0} +/- {1} (dB)".format(SNR_FFT, standard_error))
+                csv_metrics["SNR"] = float(SNR_FFT)
             elif metric == "MACC":
                 MACC_avg = np.mean(MACC_all)
                 standard_error = np.std(MACC_all) / np.sqrt(num_test_samples)
                 print("FFT MACC (FFT Label): {0} +/- {1}".format(MACC_avg, standard_error))
+                csv_metrics["MACC"] = float(MACC_avg)
             elif "AU" in metric:
                 pass
             elif "BA" in metric:  
@@ -159,17 +168,35 @@ def calculate_metrics(predictions, labels, config):
                     file_name=f'{filename_id}_FFT_BlandAltman_DifferencePlot.pdf')
             else:
                 raise ValueError("Wrong Test Metric Type")
+        # Write CSV of test metrics if logging is configured
+        try:
+            log_dir = os.environ.get('SPO2_LOG_DIR', None)
+            run_ts = os.environ.get('SPO2_RUN_TS', None)
+            if log_dir and run_ts:
+                os.makedirs(log_dir, exist_ok=True)
+                csv_path = os.path.join(log_dir, f"test_result_{run_ts}.csv")
+                # Persist only the metrics requested
+                if len(csv_metrics) > 0:
+                    pd.DataFrame([csv_metrics]).to_csv(csv_path, index=False)
+                    print(f"Saved test metrics CSV to: {csv_path}")
+        except Exception as e:
+            print(f"Warning: failed to save test metrics CSV: {e}")
+        # Return metrics to allow trainer to also append into unified CSV
+        return csv_metrics
     elif config.INFERENCE.EVALUATION_METHOD == "peak detection":
         gt_hr_peak_all = np.array(gt_hr_peak_all)
         predict_hr_peak_all = np.array(predict_hr_peak_all)
         SNR_all = np.array(SNR_all)
         MACC_all = np.array(MACC_all)
         num_test_samples = len(predict_hr_peak_all)
+        # Collect metrics for CSV
+        csv_metrics = {}
         for metric in config.TEST.METRICS:
             if metric == "MAE":
                 MAE_PEAK = np.mean(np.abs(predict_hr_peak_all - gt_hr_peak_all))
                 standard_error = np.std(np.abs(predict_hr_peak_all - gt_hr_peak_all)) / np.sqrt(num_test_samples)
                 print("Peak MAE (Peak Label): {0} +/- {1}".format(MAE_PEAK, standard_error))
+                csv_metrics["MAE"] = float(MAE_PEAK)
             elif metric == "RMSE":
                 # Calculate the squared errors, then RMSE, in order to allow
                 # for a more robust and intuitive standard error that won't
@@ -178,23 +205,28 @@ def calculate_metrics(predictions, labels, config):
                 RMSE_PEAK = np.sqrt(np.mean(squared_errors))
                 standard_error = np.sqrt(np.std(squared_errors) / np.sqrt(num_test_samples))
                 print("PEAK RMSE (Peak Label): {0} +/- {1}".format(RMSE_PEAK, standard_error))
+                csv_metrics["RMSE"] = float(RMSE_PEAK)
             elif metric == "MAPE":
                 MAPE_PEAK = np.mean(np.abs((predict_hr_peak_all - gt_hr_peak_all) / gt_hr_peak_all)) * 100
                 standard_error = np.std(np.abs((predict_hr_peak_all - gt_hr_peak_all) / gt_hr_peak_all)) / np.sqrt(num_test_samples) * 100
                 print("PEAK MAPE (Peak Label): {0} +/- {1}".format(MAPE_PEAK, standard_error))
+                csv_metrics["MAPE"] = float(MAPE_PEAK)
             elif metric == "Pearson":
                 Pearson_PEAK = np.corrcoef(predict_hr_peak_all, gt_hr_peak_all)
                 correlation_coefficient = Pearson_PEAK[0][1]
                 standard_error = np.sqrt((1 - correlation_coefficient**2) / (num_test_samples - 2))
                 print("PEAK Pearson (Peak Label): {0} +/- {1}".format(correlation_coefficient, standard_error))
+                csv_metrics["Pearson"] = float(correlation_coefficient)
             elif metric == "SNR":
                 SNR_PEAK = np.mean(SNR_all)
                 standard_error = np.std(SNR_all) / np.sqrt(num_test_samples)
                 print("PEAK SNR (PEAK Label): {0} +/- {1} (dB)".format(SNR_PEAK, standard_error))
+                csv_metrics["SNR"] = float(SNR_PEAK)
             elif metric == "MACC":
                 MACC_avg = np.mean(MACC_all)
                 standard_error = np.std(MACC_all) / np.sqrt(num_test_samples)
                 print("PEAK MACC (PEAK Label): {0} +/- {1}".format(MACC_avg, standard_error))
+                csv_metrics["MACC"] = float(MACC_avg)
             elif "AU" in metric:
                 pass
             elif "BA" in metric:
@@ -213,5 +245,18 @@ def calculate_metrics(predictions, labels, config):
                     file_name=f'{filename_id}_Peak_BlandAltman_DifferencePlot.pdf')
             else:
                 raise ValueError("Wrong Test Metric Type")
+        # Write CSV of test metrics if logging is configured
+        try:
+            log_dir = os.environ.get('SPO2_LOG_DIR', None)
+            run_ts = os.environ.get('SPO2_RUN_TS', None)
+            if log_dir and run_ts:
+                os.makedirs(log_dir, exist_ok=True)
+                csv_path = os.path.join(log_dir, f"test_result_{run_ts}.csv")
+                if len(csv_metrics) > 0:
+                    pd.DataFrame([csv_metrics]).to_csv(csv_path, index=False)
+                    print(f"Saved test metrics CSV to: {csv_path}")
+        except Exception as e:
+            print(f"Warning: failed to save test metrics CSV: {e}")
+        return csv_metrics
     else:
         raise ValueError("Inference evaluation method name wrong!")

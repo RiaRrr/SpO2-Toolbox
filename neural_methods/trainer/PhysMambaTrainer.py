@@ -21,6 +21,7 @@ class PhysMambaTrainer(BaseTrainer):
     def __init__(self, config, data_loader):
         """Inits parameters from args and the writer for TensorboardX."""
         super().__init__()
+        self.config = config
         self.device = torch.device(config.DEVICE)
         self.max_epoch_num = config.TRAIN.EPOCHS
         self.model_dir = config.MODEL.MODEL_DIR
@@ -28,7 +29,6 @@ class PhysMambaTrainer(BaseTrainer):
         self.batch_size = config.TRAIN.BATCH_SIZE
         self.num_of_gpu = config.NUM_OF_GPU_TRAIN
         self.base_len = self.num_of_gpu
-        self.config = config
         self.min_valid_loss = None
         self.best_epoch = 0
         self.diff_flag = 0
@@ -36,9 +36,18 @@ class PhysMambaTrainer(BaseTrainer):
             self.diff_flag = 1
         self.frame_rate = config.TRAIN.DATA.FS
 
+        # Initialize unified CSV logger
+        self._init_csv_logger()
+
         self.model = PhysMamba().to(self.device)  # [3, T, 128,128]
         if self.num_of_gpu > 0:
-            self.model = torch.nn.DataParallel(self.model, device_ids=list(range(config.NUM_OF_GPU_TRAIN)))
+            # Contiguous GPUs starting at DEVICE index
+            device_ids = None
+            if self.device.type == 'cuda':
+                base_idx = self.device.index if self.device.index is not None else 0
+                device_ids = list(range(base_idx, base_idx + config.NUM_OF_GPU_TRAIN))
+            if device_ids:
+                self.model = torch.nn.DataParallel(self.model, device_ids=device_ids)
 
         if config.TOOLBOX_MODE == "train_and_test":
             self.num_train_batches = len(data_loader["train"])
@@ -93,11 +102,18 @@ class PhysMambaTrainer(BaseTrainer):
                 self.optimizer.step()
                 self.scheduler.step()
                 tbar.set_postfix(loss=loss.item())
+                # CSV per-batch
+                self._append_csv_row({
+                    'mode':'train','epoch':epoch,'batch':idx+1,
+                    'lr': self.scheduler.get_last_lr()[0] if hasattr(self.scheduler,'get_last_lr') else '',
+                    'loss': float(loss.item())
+                })
             
             self.save_model(epoch)
             if not self.config.TEST.USE_LAST_EPOCH: 
                 valid_loss = self.valid(data_loader)
                 print('validation loss: ', valid_loss)
+                self._append_csv_row({'mode':'valid','epoch':epoch,'batch':idx+1,'valid_loss':valid_loss})
                 if self.min_valid_loss is None:
                     self.min_valid_loss = valid_loss
                     self.best_epoch = epoch
@@ -109,6 +125,7 @@ class PhysMambaTrainer(BaseTrainer):
             torch.cuda.empty_cache()
         if not self.config.TEST.USE_LAST_EPOCH: 
             print("best trained epoch: {}, min_val_loss: {}".format(self.best_epoch, self.min_valid_loss)) 
+            self._append_csv_row({'mode':'valid_summary','epoch':self.best_epoch,'min_valid_loss':self.min_valid_loss})
         
     def valid(self, data_loader):
         """ Runs the model on valid sets."""
@@ -191,7 +208,12 @@ class PhysMambaTrainer(BaseTrainer):
                     labels[subj_index][sort_index] = label[idx]
 
         print('')
-        calculate_metrics(predictions, labels, self.config)
+        metrics_dict = calculate_metrics(predictions, labels, self.config)
+        if isinstance(metrics_dict, dict) and metrics_dict:
+            test_epoch_used = None
+            if self.config.TOOLBOX_MODE == 'train_and_test':
+                test_epoch_used = self.best_epoch if not self.config.TEST.USE_LAST_EPOCH else (self.max_epoch_num - 1)
+            self._append_csv_row({'mode':'test','epoch':test_epoch_used, **{k:v for k,v in metrics_dict.items() if k in ['MAE','RMSE','MAPE','Pearson','SNR','MACC']}})
         if self.config.TEST.OUTPUT_SAVE_DIR: # saving test outputs 
             self.save_test_outputs(predictions, labels, self.config)
 

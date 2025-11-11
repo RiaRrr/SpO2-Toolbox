@@ -3,6 +3,11 @@
 import argparse
 import random
 import time
+import os
+import sys
+import atexit
+from datetime import datetime
+from typing import TextIO
 
 import numpy as np
 import torch
@@ -33,6 +38,35 @@ def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2 ** 32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
+
+
+class _StdoutStderrTee:
+    """
+    Tee stdout and stderr to both console and a log file.
+    """
+    def __init__(self, log_fp: TextIO, original_stream: TextIO):
+        self.log_fp = log_fp
+        self.original_stream = original_stream
+
+    def write(self, data):
+        try:
+            self.original_stream.write(data)
+        except Exception:
+            pass
+        try:
+            self.log_fp.write(data)
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            self.original_stream.flush()
+        except Exception:
+            pass
+        try:
+            self.log_fp.flush()
+        except Exception:
+            pass
 
 
 def add_args(parser):
@@ -148,6 +182,74 @@ if __name__ == "__main__":
 
     # configurations.
     config = get_config(args)
+
+    # Initialize logging: create log dir and tee stdout/stderr to a timestamped log file
+    try:
+        # Use TEST EXP_DATA_NAME as the run namespace so train and test share the same log root
+        exp_name_for_log = config.TEST.DATA.EXP_DATA_NAME if hasattr(config.TEST.DATA, 'EXP_DATA_NAME') else config.TRAIN.DATA.EXP_DATA_NAME
+        if(config.TOOLBOX_MODE == 'unsupervised_method'):
+            exp_name_for_log = config.TOOLBOX_MODE + '_' + config.UNSUPERVISED.METHOD[0]
+        else:
+            exp_name_for_log = config.TRAIN.MODEL_FILE_NAME + exp_name_for_log if hasattr(config.TRAIN, 'MODEL_FILE_NAME') else config.TRAIN.DATA.EXP_DATA_NAME
+        log_dir = os.path.join(config.LOG.PATH, exp_name_for_log, 'log')
+        os.makedirs(log_dir, exist_ok=True)
+        run_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        log_file_path = os.path.join(log_dir, f"{run_ts}.log")
+        log_fp = open(log_file_path, 'a', buffering=1)
+
+        # Export for downstream modules (e.g., metrics) to discover
+        os.environ['SPO2_LOG_DIR'] = log_dir
+        os.environ['SPO2_RUN_TS'] = run_ts
+        os.environ['SPO2_CONFIG_FILE'] = getattr(args, 'config_file', '') or ''
+
+        # Write config file content and resolved config at the top of the log
+        print(f"Logging to: {log_file_path}")
+        if getattr(args, 'config_file', None) and os.path.exists(args.config_file):
+            try:
+                with open(args.config_file, 'r') as cf:
+                    cfg_text = cf.read()
+                log_fp.write("==== Used YAML config file path ====" + "\n")
+                log_fp.write(str(args.config_file) + "\n\n")
+                log_fp.write("==== YAML config file content ====" + "\n")
+                log_fp.write(cfg_text + "\n\n")
+            except Exception:
+                pass
+
+        # Attempt to dump resolved config if supported
+        try:
+            resolved_cfg_text = config.dump()
+        except Exception:
+            resolved_cfg_text = str(config)
+        log_fp.write("==== Resolved config (post-merge) ====" + "\n")
+        log_fp.write(resolved_cfg_text + "\n\n")
+
+        # Install tee for stdout/stderr
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+        sys.stdout = _StdoutStderrTee(log_fp, original_stdout)
+        sys.stderr = _StdoutStderrTee(log_fp, original_stderr)
+
+        def _cleanup_logging():
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+            except Exception:
+                pass
+            try:
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+            except Exception:
+                pass
+            try:
+                log_fp.flush()
+                log_fp.close()
+            except Exception:
+                pass
+
+        atexit.register(_cleanup_logging)
+    except Exception as _log_ex:
+        # If logging setup fails, continue without file logging
+        print(f"Warning: logging initialization failed: {_log_ex}")
+
     print('Configuration:')
     print(config, end='\n\n')
 
@@ -320,6 +422,8 @@ if __name__ == "__main__":
             unsupervised_loader = data_loader.UBFCPHYSLoader.UBFCPHYSLoader
         elif config.UNSUPERVISED.DATA.DATASET == "iBVP":
             unsupervised_loader = data_loader.iBVPLoader.iBVPLoader
+        elif config.UNSUPERVISED.DATA.DATASET == "SPO2":
+            unsupervised_loader = data_loader.SPO2Loader.SPO2Loader
         else:
             raise ValueError("Unsupported dataset! Currently supporting UBFC-rPPG, PURE, MMPD, \
                              SCAMPS, BP4D+, UBFC-PHYS and iBVP.")

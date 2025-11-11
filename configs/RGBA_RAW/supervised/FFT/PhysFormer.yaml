@@ -102,7 +102,7 @@ TEST:
         H: 64
         W: 64
 DEVICE: cuda:1
-NUM_OF_GPU_TRAIN: 1
+NUM_OF_GPU_TRAIN: 2
 LOG:
   PATH: runs/exp
 MODEL:

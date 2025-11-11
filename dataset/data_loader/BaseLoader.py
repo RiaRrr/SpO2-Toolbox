@@ -125,12 +125,12 @@ class BaseLoader(Dataset):
         # chunk_id is the extracted, numeric chunk identifier. Following the previous comments, 
         # the chunk_id for example would be 0
         chunk_id = item_path_filename[split_idx + 6:].split('.')[0]
-        try:
-            print(f"DEBUG BaseLoader: index={index}, data.shape={getattr(data, 'shape', None)}, "
-                  f"label.shape={getattr(label, 'shape', None)}, data_format={self.data_format}, "
-                  f"dtype={data.dtype}")
-        except Exception:
-            pass
+        # try:
+        #     print(f"DEBUG BaseLoader: index={index}, data.shape={getattr(data, 'shape', None)}, "
+        #           f"label.shape={getattr(label, 'shape', None)}, data_format={self.data_format}, "
+        #           f"dtype={data.dtype}")
+        # except Exception:
+        #     pass
         return data, label, filename, chunk_id
 
     def get_raw_data(self, raw_data_path):

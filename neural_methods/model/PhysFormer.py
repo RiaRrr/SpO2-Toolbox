@@ -303,10 +303,10 @@ class ViT_ST_ST_Compact3_TDC_gra_sharp(nn.Module):
 
     def forward(self, x, gra_sharp):
         # DEBUG: inspect input
-        try:
-            print("DEBUG PhysFormer.forward: input type:", type(x), "shape:", getattr(x, 'shape', None), "dtype:", getattr(x, 'dtype', None))
-        except Exception:
-            pass
+        # try:
+        #     print("DEBUG PhysFormer.forward: input type:", type(x), "shape:", getattr(x, 'shape', None), "dtype:", getattr(x, 'dtype', None))
+        # except Exception:
+        #     pass
 
         # b is batch number, c channels, t frame, fh frame height, and fw frame width
         b, c, t, fh, fw = x.shape
@@ -328,12 +328,12 @@ class ViT_ST_ST_Compact3_TDC_gra_sharp(nn.Module):
         
         # upsampling heads
         # Debug intermediate shapes before reshape
-        try:
-            print("DEBUG PhysFormer: Trans_features3.shape:", getattr(Trans_features3, 'shape', None))
-            tmp = Trans_features3.transpose(1, 2)
-            print("DEBUG PhysFormer: after transpose shape:", getattr(tmp, 'shape', None), "using (gt,gh,gw)=", (gt, gh, gw))
-        except Exception:
-            pass
+        # try:
+        #     print("DEBUG PhysFormer: Trans_features3.shape:", getattr(Trans_features3, 'shape', None))
+        #     tmp = Trans_features3.transpose(1, 2)
+        #     print("DEBUG PhysFormer: after transpose shape:", getattr(tmp, 'shape', None), "using (gt,gh,gw)=", (gt, gh, gw))
+        # except Exception:
+        #     pass
 
         # Reshape back using the actual grid sizes inferred above
         features_last = Trans_features3.transpose(1, 2).view(b, self.dim, gt, gh, gw)

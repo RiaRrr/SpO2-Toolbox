@@ -29,6 +29,7 @@ class PhysFormerTrainer(BaseTrainer):
         """Inits parameters from args and the writer for TensorboardX."""
         super().__init__()
         self.device = torch.device(config.DEVICE)
+        self.config = config
         self.max_epoch_num = config.TRAIN.EPOCHS
         self.model_dir = config.MODEL.MODEL_DIR
         self.dropout_rate = config.MODEL.DROP_RATE
@@ -43,9 +44,11 @@ class PhysFormerTrainer(BaseTrainer):
         self.num_of_gpu = config.NUM_OF_GPU_TRAIN
         self.frame_rate = config.TRAIN.DATA.FS
         self.frame_rate_valid = config.VALID.DATA.FS
-        self.config = config 
         self.min_valid_loss = None
         self.best_epoch = 0
+        # Build contiguous device_ids starting at DEVICE index, using NUM_OF_GPU_TRAIN GPUs
+        self.device_ids = self._compute_device_ids()
+        print(self.device_ids)
 
         if config.TOOLBOX_MODE == "train_and_test":
             self.chunk_len = config.TRAIN.DATA.PREPROCESS.CHUNK_LENGTH
@@ -53,7 +56,8 @@ class PhysFormerTrainer(BaseTrainer):
                 image_size=(self.chunk_len,config.TRAIN.DATA.PREPROCESS.RESIZE.H,config.TRAIN.DATA.PREPROCESS.RESIZE.W), 
                 patches=(self.patch_size,) * 3, dim=self.dim, ff_dim=self.ff_dim, num_heads=self.num_heads, num_layers=self.num_layers, 
                 dropout_rate=self.dropout_rate, theta=self.theta).to(self.device)
-            self.model = torch.nn.DataParallel(self.model, device_ids=list(range(config.NUM_OF_GPU_TRAIN)))
+            if self.device_ids:
+                self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)
 
             self.num_train_batches = len(data_loader["train"])
             self.criterion_reg = torch.nn.MSELoss()
@@ -71,9 +75,30 @@ class PhysFormerTrainer(BaseTrainer):
                 image_size=(self.chunk_len,config.TRAIN.DATA.PREPROCESS.RESIZE.H,config.TRAIN.DATA.PREPROCESS.RESIZE.W), 
                 patches=(self.patch_size,) * 3, dim=self.dim, ff_dim=self.ff_dim, num_heads=self.num_heads, num_layers=self.num_layers, 
                 dropout_rate=self.dropout_rate, theta=self.theta).to(self.device)
-            self.model = torch.nn.DataParallel(self.model, device_ids=list(range(config.NUM_OF_GPU_TRAIN)))
+            if self.device_ids:
+                self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)
         else:
             raise ValueError("Physformer trainer initialized in incorrect toolbox mode!")
+
+    def _compute_device_ids(self):
+        """Create a list of device ids starting from config.DEVICE index with length NUM_OF_GPU_TRAIN.
+        Example: DEVICE='cuda:1', NUM_OF_GPU_TRAIN=2 -> [1, 2]. Returns None for CPU.
+        """
+        try:
+            if self.device.type != 'cuda':
+                return None
+            start_idx = self.device.index if self.device.index is not None else 0
+            total = torch.cuda.device_count()
+            if total == 0:
+                return None
+            end_idx = start_idx + int(self.num_of_gpu)
+            if end_idx > total:
+                raise ValueError(f"Requested {self.num_of_gpu} GPUs starting at cuda:{start_idx}, but only {total} GPUs available.")
+            return list(range(start_idx, end_idx))
+        except Exception as e:
+            print(f"WARN: falling back to default device list due to: {e}")
+            # best-effort fallback to original behavior
+            return list(range(int(self.num_of_gpu)))
 
     def _ensure_physformer_input(self, data):
         """Ensure tensor is N,C,T,H,W and channel in {1,3}. Drop 4th channel if present.
@@ -129,10 +154,10 @@ class PhysFormerTrainer(BaseTrainer):
 
                 # Ensure data layout and channel count are compatible with PhysFormer (N,C,T,H,W, C in {1,3})
                 data = self._ensure_physformer_input(data)
-                try:
-                    print("DEBUG PhysFormerTrainer (train): data.shape after ensure:", tuple(data.shape))
-                except Exception:
-                    pass
+                # try:
+                #     print("DEBUG PhysFormerTrainer (train): data.shape after ensure:", tuple(data.shape))
+                # except Exception:
+                #     pass
 
                 self.optimizer.zero_grad()
 
@@ -223,10 +248,10 @@ class PhysFormerTrainer(BaseTrainer):
             for val_idx, val_batch in enumerate(vbar):
                 data, label = val_batch[0].float().to(self.device), val_batch[1].float().to(self.device)
                 data = self._ensure_physformer_input(data)
-                try:
-                    print("DEBUG PhysFormerTrainer (valid): data.shape after ensure:", tuple(data.shape))
-                except Exception:
-                    pass
+                # try:
+                #     print("DEBUG PhysFormerTrainer (valid): data.shape after ensure:", tuple(data.shape))
+                # except Exception:
+                #     pass
                 gra_sharp = 2.0
                 rPPG, _, _, _ = self.model(data, gra_sharp)
                 rPPG = (rPPG-torch.mean(rPPG, axis=-1).view(-1, 1))/torch.std(rPPG).view(-1, 1)
@@ -269,7 +294,8 @@ class PhysFormerTrainer(BaseTrainer):
                 print(best_model_path)
                 self.model.load_state_dict(torch.load(best_model_path))
 
-        self.model = self.model.to(self.config.DEVICE)
+        # Ensure model stays on the starting device for DataParallel
+        self.model = self.model.to(self.device)
         self.model.eval()
         print("Running model evaluation on the testing dataset!")
         with torch.no_grad():
@@ -278,10 +304,10 @@ class PhysFormerTrainer(BaseTrainer):
                 data, label = test_batch[0].to(
                     self.config.DEVICE), test_batch[1].to(self.config.DEVICE)
                 data = self._ensure_physformer_input(data)
-                try:
-                    print("DEBUG PhysFormerTrainer (test): data.shape after ensure:", tuple(data.shape))
-                except Exception:
-                    pass
+                # try:
+                #     print("DEBUG PhysFormerTrainer (test): data.shape after ensure:", tuple(data.shape))
+                # except Exception:
+                #     pass
                 gra_sharp = 2.0
                 pred_ppg_test, _, _, _ = self.model(data, gra_sharp)
                 for idx in range(batch_size):

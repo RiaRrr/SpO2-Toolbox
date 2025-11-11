@@ -1,0 +1,4 @@
+from joblib import load, dump
+data = load("/root/jjt/SpO2-Toolbox/runs/exp/SPO2_SizeW64_SizeH64_ClipLength128_DataTypeDiffNormalized_DataAugNone_LabelTypeDiffNormalized_Crop_faceFalse_BackendHC_Large_boxFalse_Large_size1.5_Dyamic_DetFalse_det_len32_Median_face_boxFalse/saved_test_outputs/SpO2_PhysNet_PEAK_outputs.pickle")
+print(data.keys())
+print(data)

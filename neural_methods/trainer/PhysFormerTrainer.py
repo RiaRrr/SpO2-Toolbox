@@ -29,6 +29,7 @@ class PhysFormerTrainer(BaseTrainer):
         """Inits parameters from args and the writer for TensorboardX."""
         super().__init__()
         self.device = torch.device(config.DEVICE)
+        self.config = config
         self.max_epoch_num = config.TRAIN.EPOCHS
         self.model_dir = config.MODEL.MODEL_DIR
         self.dropout_rate = config.MODEL.DROP_RATE
@@ -46,6 +47,9 @@ class PhysFormerTrainer(BaseTrainer):
         self.config = config 
         self.min_valid_loss = None
         self.best_epoch = 0
+        # Build contiguous device_ids starting at DEVICE index, using NUM_OF_GPU_TRAIN GPUs
+        self.device_ids = self._compute_device_ids()
+        print(self.device_ids)
 
         if config.TOOLBOX_MODE == "train_and_test":
             self.chunk_len = config.TRAIN.DATA.PREPROCESS.CHUNK_LENGTH
@@ -53,7 +57,8 @@ class PhysFormerTrainer(BaseTrainer):
                 image_size=(self.chunk_len,config.TRAIN.DATA.PREPROCESS.RESIZE.H,config.TRAIN.DATA.PREPROCESS.RESIZE.W), 
                 patches=(self.patch_size,) * 3, dim=self.dim, ff_dim=self.ff_dim, num_heads=self.num_heads, num_layers=self.num_layers, 
                 dropout_rate=self.dropout_rate, theta=self.theta).to(self.device)
-            self.model = torch.nn.DataParallel(self.model, device_ids=list(range(config.NUM_OF_GPU_TRAIN)))
+            if self.device_ids:
+                self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)
 
             self.num_train_batches = len(data_loader["train"])
             self.criterion_reg = torch.nn.MSELoss()
@@ -71,10 +76,30 @@ class PhysFormerTrainer(BaseTrainer):
                 image_size=(self.chunk_len,config.TRAIN.DATA.PREPROCESS.RESIZE.H,config.TRAIN.DATA.PREPROCESS.RESIZE.W), 
                 patches=(self.patch_size,) * 3, dim=self.dim, ff_dim=self.ff_dim, num_heads=self.num_heads, num_layers=self.num_layers, 
                 dropout_rate=self.dropout_rate, theta=self.theta).to(self.device)
-            self.model = torch.nn.DataParallel(self.model, device_ids=list(range(config.NUM_OF_GPU_TRAIN)))
+            if self.device_ids:
+                self.model = torch.nn.DataParallel(self.model, device_ids=self.device_ids)
         else:
             raise ValueError("Physformer trainer initialized in incorrect toolbox mode!")
 
+    def _compute_device_ids(self):
+        """Create a list of device ids starting from config.DEVICE index with length NUM_OF_GPU_TRAIN.
+        Example: DEVICE='cuda:1', NUM_OF_GPU_TRAIN=2 -> [1, 2]. Returns None for CPU.
+        """
+        try:
+            if self.device.type != 'cuda':
+                return None
+            start_idx = self.device.index if self.device.index is not None else 0
+            total = torch.cuda.device_count()
+            if total == 0:
+                return None
+            end_idx = start_idx + int(self.num_of_gpu)
+            if end_idx > total:
+                raise ValueError(f"Requested {self.num_of_gpu} GPUs starting at cuda:{start_idx}, but only {total} GPUs available.")
+            return list(range(start_idx, end_idx))
+        except Exception as e:
+            print(f"WARN: falling back to default device list due to: {e}")
+            # best-effort fallback to original behavior
+            return list(range(int(self.num_of_gpu)))
 
     def train(self, data_loader):
         """Training routine for model"""
@@ -235,8 +260,7 @@ class PhysFormerTrainer(BaseTrainer):
                 print("Testing uses best epoch selected using model selection as non-pretrained model!")
                 print(best_model_path)
                 self.model.load_state_dict(torch.load(best_model_path))
-
-        self.model = self.model.to(self.config.DEVICE)
+        self.model = self.model.to(self.device)
         self.model.eval()
         print("Running model evaluation on the testing dataset!")
         with torch.no_grad():

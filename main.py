@@ -190,9 +190,11 @@ if __name__ == "__main__":
         if(config.TOOLBOX_MODE == 'unsupervised_method'):
             exp_name_for_log = config.TOOLBOX_MODE + '_' + config.UNSUPERVISED.METHOD[0]
         else:
-            exp_name_for_log = config.TRAIN.MODEL_FILE_NAME + exp_name_for_log if hasattr(config.TRAIN, 'MODEL_FILE_NAME') else config.TRAIN.DATA.EXP_DATA_NAME
+            exp_setting = config.TRAIN.MODEL_FILE_NAME if hasattr(config.TRAIN, 'MODEL_FILE_NAME') else config.TRAIN.DATA.EXP_DATA_NAME
+            exp_name_for_log = exp_setting + "_" + exp_name_for_log
         log_dir = os.path.join(config.LOG.PATH, exp_name_for_log, 'log')
         os.makedirs(log_dir, exist_ok=True)
+        print("log_dir:",log_dir)
         run_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         log_file_path = os.path.join(log_dir, f"{run_ts}.log")
         log_fp = open(log_file_path, 'a', buffering=1)

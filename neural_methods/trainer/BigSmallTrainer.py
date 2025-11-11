@@ -305,6 +305,7 @@ class BigSmallTrainer(BaseTrainer):
                     min_valid_loss = valid_loss
                     self.used_epoch = epoch
                     print("Update best model! Best epoch: {}".format(self.used_epoch))
+                    self.save_best_model()
                 elif self.model_to_use == 'last_epoch':
                     self.used_epoch = epoch
             
@@ -351,6 +352,7 @@ class BigSmallTrainer(BaseTrainer):
                 data, labels = self.format_data_shape(data, labels)
                 data, labels = self.send_data_to_device(data, labels)
 
+                # Forward pass
                 au_out, bvp_out, resp_out = self.model(data)
                 au_loss = self.criterionAU(au_out, labels[:, self.label_idx_valid_au, 0]) # au loss
                 bvp_loss = self.criterionBVP(bvp_out, labels[:, self.label_idx_valid_bvp, 0]) # bvp loss

@@ -136,10 +136,12 @@ class PhysnetTrainer(BaseTrainer):
                     self.min_valid_loss = valid_loss
                     self.best_epoch = epoch
                     print("Update best model! Best epoch: {}".format(self.best_epoch))
+                    self.save_best_model()
                 elif (valid_loss < self.min_valid_loss):
                     self.min_valid_loss = valid_loss
                     self.best_epoch = epoch
                     print("Update best model! Best epoch: {}".format(self.best_epoch))
+                    self.save_best_model()
                 # Append validation row
                 self._append_csv_row({
                     'mode':'valid',

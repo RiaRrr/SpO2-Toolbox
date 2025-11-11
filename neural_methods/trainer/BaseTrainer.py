@@ -97,6 +97,19 @@ class BaseTrainer:
 
         print('Saving outputs to:', output_path)
 
+    def save_best_model(self):
+        """Save a snapshot of the current model as best_model.pth in self.model_dir."""
+        try:
+            if not hasattr(self, 'model') or not hasattr(self, 'model_dir'):
+                return
+            if not os.path.exists(self.model_dir):
+                os.makedirs(self.model_dir, exist_ok=True)
+            best_path = os.path.join(self.model_dir, 'best_model.pth')
+            torch.save(self.model.state_dict(), best_path)
+            print('Saved Best Model Path: ', best_path)
+        except Exception as e:
+            print(f"WARN: failed to save best model: {e}")
+
     def plot_losses_and_lrs(self, train_loss, valid_loss, lrs, config):
 
         output_dir = os.path.join(config.LOG.PATH, config.TRAIN.DATA.EXP_DATA_NAME, 'plots')

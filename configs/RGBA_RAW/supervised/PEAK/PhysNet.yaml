@@ -2,7 +2,7 @@ BASE: ['']
 TOOLBOX_MODE: "train_and_test"      # "train_and_test"  or "only_test"
 TRAIN:
   BATCH_SIZE:  2
-  EPOCHS: 1
+  EPOCHS: 30
 
   LR: 9e-3
   MODEL_FILE_NAME: SpO2_PhysNet_PEAK
@@ -14,7 +14,7 @@ TRAIN:
     DATA_FORMAT: NCDHW  #NDCHW   NCDHW
     DATA_PATH: "/root/shared/SpO2-Dataset"  
     FILE_LIST: "/root/jjt/file_list_new.csv"
-    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache"       # Processed dataset save path, need to be updated
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/phy"       # Processed dataset save path, need to be updated
     VIDEO_TYPE: "RGBA_ROI"   # 
     EXP_DATA_NAME: ""
     BEGIN: 0.0

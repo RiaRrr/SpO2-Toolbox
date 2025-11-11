@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import cv2
-cv2.setNumThreads(1)   # 禁止 OpenCV 内部多线程，防止 CPU 爆满
 import glob
 import os
 from scipy.interpolate import interp1d
@@ -55,7 +54,6 @@ class SPO2Loader(BaseLoader):
           and map it to the expected data_dirs dicts.
         """
         print(f"[SPO2Loader] get_raw_data scanning: {data_path}")
-
         dirs = []
 
         # 1) If user provided a raw-filelist under config (TRAIN.DATA.FILE_LIST), use it to pick which videos to process.
@@ -86,66 +84,56 @@ class SPO2Loader(BaseLoader):
                     else:
                         col = df.columns[0]
 
+
+                    video_type_cfg = getattr(self.config_data, "VIDEO_TYPE", "").strip()
+                    if video_type_cfg:
+                        wanted_name = video_type_cfg + ".avi"
+                    else:
+                        wanted_name = None
+
                     for entry in df[col].astype(str).tolist():
                         entry = entry.strip()
                         if not entry:
                             continue
 
-                        # resolve entry to an absolute path under data_path if not absolute
-                        if os.path.isabs(entry):
-                            candidate = entry
-                        else:
-                            candidate = os.path.join(data_path, entry)
-                            print(candidate)
-                        # If candidate is a file, use it directly. If it's a directory, find an avi inside.
-                        if os.path.isfile(candidate):
-                            video_file = candidate
-                        elif os.path.isdir(candidate):
-                            video_dir = candidate
-                            avi_files = [f for f in os.listdir(video_dir) if f.lower().endswith('.avi')]
-                            if not avi_files:
-                                continue
-                            chosen = None
+                        # 拼完整路径（形如 /data1/disk/3/jjt/SpO2-Dataset/070203/v01）
+                        video_dir = os.path.join(data_path, entry)
+                        if not os.path.isdir(video_dir):
+                            print(f"[WARN] Skipping non-dir path: {video_dir}")
+                            continue
+
+                        # 在该目录下找目标视频
+                        avi_files = [f for f in os.listdir(video_dir) if f.lower().endswith(".avi")]
+                        if not avi_files:
+                            print(f"[WARN] No .avi found in {video_dir}")
+                            continue
+
+                        # 精确匹配 VIDEO_TYPE
+                        chosen = None
+                        if wanted_name:
                             for f in avi_files:
-                                if 'raw' in f.lower():
+                                if f.lower() == wanted_name.lower():
                                     chosen = f
                                     break
-                            if chosen is None:
-                                chosen = avi_files[0]
-                            video_file = os.path.join(video_dir, chosen)
-                        else:
-                            # try globbing
-                            matches = glob.glob(candidate)
-                            found = False
-                            for m in matches:
-                                if os.path.isdir(m):
-                                    video_dir = m
-                                    avi_files = [f for f in os.listdir(video_dir) if f.lower().endswith('.avi')]
-                                    if not avi_files:
-                                        continue
-                                    chosen = None
-                                    for f in avi_files:
-                                        if 'raw' in f.lower():
-                                            chosen = f
-                                            break
-                                    if chosen is None:
-                                        chosen = avi_files[0]
-                                    video_file = os.path.join(video_dir, chosen)
-                                    found = True
-                                    break
-                            if not found:
-                                continue
 
-                        # derive subject and session
-                        video_dir = os.path.dirname(video_file)
-                        session = os.path.basename(os.path.dirname(video_file))
-                        subj = os.path.basename(os.path.dirname(os.path.dirname(video_file)))
+                        # 如果没指定或没匹配到，就跳过
+                        if not chosen:
+                            print(f"[WARN] No matching {wanted_name} in {video_dir}")
+                            continue
+
+                        video_file = os.path.join(video_dir, chosen)
+
+                        # 提取 subject / session 信息
+                        session = os.path.basename(video_dir)
+                        subj = os.path.basename(os.path.dirname(video_dir))
+
                         dirs.append({
-                            'index': session[1:] if session.startswith('v') else session,
-                            'path': video_file,
-                            'subject': subj,
-                            'type': os.path.splitext(os.path.basename(video_file))[0].split('_')[-1].lower()
+                            "index": session[1:] if session.startswith("v") else session,
+                            "path": video_file,
+                            "subject": subj,
+                            "type": os.path.splitext(os.path.basename(video_file))[0].split("_")[-1].lower()
                         })
+
 
                     if dirs:
                         return dirs
@@ -194,8 +182,10 @@ class SPO2Loader(BaseLoader):
 
 
     def preprocess_dataset_subprocess(self, data_dirs, config_preprocess, i,  file_list_dict):
-        # Stream video frames from disk in windowed chunks to avoid loading entire video into memory.
+        
+        # Read video frames
         video_file = data_dirs[i]['path']
+        frames = self.read_video(video_file)
 
         # Get the directory of the current video
         video_dir = os.path.dirname(video_file)
@@ -204,70 +194,78 @@ class SPO2Loader(BaseLoader):
         subject_id = video_dir.split(os.sep)[-2]
         experiment_id = video_dir.split(os.sep)[-1]  # Assuming experiment ID follows subject ID
         print(f"subject_id: {subject_id}, experiment_id: {experiment_id}")
-
         # Get BVP, frame timestamps
         bvp_file = os.path.join(video_dir, "BVP.csv")
         timestamp_file = os.path.join(video_dir, "frames_timestamp.csv")
 
-        # Read frame timestamps (small) and BVP (small)
+        # Read frame timestamps
         frame_timestamps = self.read_frame_timestamps(timestamp_file)
+
+        # Read BVP data and timestamps
         bvp_timestamps, bvp_values = self.read_bvp(bvp_file)
 
-        # Resample BVP data to match video frames (this produces an array sized to number of frames)
+        # Resample BVP data to match video frames
         resampled_bvp = self.synchronize_and_resample(bvp_timestamps, bvp_values, frame_timestamps)
 
-        # We'll stream frames using OpenCV VideoCapture in windows of size CHUNK_LENGTH
-        chunk_length = int(config_preprocess.CHUNK_LENGTH)
-        cap = cv2.VideoCapture(video_file)
-        success, frame = cap.read()
-        buf_frames = []
-        frame_idx = 0
-        input_name_list = []
-
-        # Process all videos (previous code gated on filenames containing 'face' which
-        # caused videos without that substring to be skipped). We stream windows
-        # and process/save each window immediately to avoid holding a whole video
-        # in memory.
-        while success:
-            frame_rgb = cv2.cvtColor(np.array(frame), cv2.COLOR_BGR2RGB)
-            buf_frames.append(frame_rgb)
-
-            # When we have a full window, process and save immediately
-            if len(buf_frames) >= chunk_length:
-                frames_np = np.array(buf_frames)
-                # select corresponding portion of resampled_bvp
-                bvp_segment = resampled_bvp[frame_idx:frame_idx + len(buf_frames)] if resampled_bvp is not None else None
-                try:
-                    frames_clips, bvps_clips = self.preprocess(frames_np, bvp_segment, config_preprocess)
-                    filename = f"{subject_id}_{experiment_id}"
-                    in_list, lab_list = self.save_multi_process(frames_clips, bvps_clips, filename)
-                    input_name_list += in_list
-                except Exception as e:
-                    print(f"Error processing window starting at frame {frame_idx}: {e}")
-                frame_idx += len(buf_frames)
-                buf_frames = []
-
-            success, frame = cap.read()
-
-        # Process any remaining frames (tail)
-        if len(buf_frames) > 0:
-            frames_np = np.array(buf_frames)
-            bvp_segment = resampled_bvp[frame_idx:frame_idx + len(buf_frames)] if resampled_bvp is not None else None
+        # RR and SpO2 files may or may not exist in some recordings. Read if present.
+        rr_file = os.path.join(video_dir, "RR.csv")
+        spo2_file = os.path.join(video_dir, "SpO2.csv")
+        rr_timestamps = None
+        rr_values = None
+        spo2_values = None
+        if os.path.exists(rr_file):
             try:
-                frames_clips, bvps_clips = self.preprocess(frames_np, bvp_segment, config_preprocess)
-                filename = f"{subject_id}_{experiment_id}"
-                in_list, lab_list = self.save_multi_process(frames_clips, bvps_clips, filename)
-                input_name_list += in_list
-            except Exception as e:
-                print(f"Error processing final window for {video_file}: {e}")
+                rr_df = pd.read_csv(rr_file)
+                # attempt to infer timestamp and rr column names
+                if 'timestamp' in rr_df.columns and 'rr' in rr_df.columns:
+                    rr_timestamps = rr_df['timestamp'].values
+                    rr_values = rr_df['rr'].values
+                else:
+                    # fallback: use first two numeric columns
+                    numeric_cols = rr_df.select_dtypes(include=[float, int]).columns.tolist()
+                    if len(numeric_cols) >= 2:
+                        rr_timestamps = rr_df[numeric_cols[0]].values
+                        rr_values = rr_df[numeric_cols[1]].values
+                    elif len(numeric_cols) == 1:
+                        rr_values = rr_df[numeric_cols[0]].values
+                        rr_timestamps = None
+                    else:
+                        rr_values = None
+                        rr_timestamps = None
+            except Exception:
+                print(f"⚠️ Failed to read RR file: {rr_file}. Continuing without RR.")
+                rr_timestamps = None
+                rr_values = None
+        else:
+            # Not all datasets include RR.csv — this is acceptable
+            # print a debug message for visibility
+            # (kept as print to avoid adding heavy logging dependencies here)
+            print(f"ℹ️ RR file not found for {video_dir}; continuing without RR.")
 
-        cap.release()
-        # store list of generated input npy files for this video (may be empty if not processed)
-        try:
-            file_list_dict[i] = input_name_list
-        except Exception:
-            # Manager dict may fail on some types; swallow to avoid crashing the subprocess
-            pass
+        if os.path.exists(spo2_file):
+            try:
+                spo2_df = pd.read_csv(spo2_file)
+                # assume first numeric column is the SpO2 values
+                numeric_cols = spo2_df.select_dtypes(include=[float, int]).columns.tolist()
+                if len(numeric_cols) >= 1:
+                    spo2_values = spo2_df[numeric_cols[0]].values
+                else:
+                    spo2_values = None
+            except Exception:
+                print(f"⚠️ Failed to read SpO2 file: {spo2_file}. Ignoring SpO2 for this sample.")
+
+        # Process frames, BVP signals, and SpO2 signals according to the configuration
+        if config_preprocess.USE_PSUEDO_PPG_LABEL:
+            bvps = self.generate_pos_psuedo_labels(frames, fs=self.config_data.FS)
+        else:
+            bvps = resampled_bvp
+
+        # Label once here
+
+        frames_clips, bvps_clips = self.preprocess(frames, bvps, config_preprocess)
+        filename = f"{subject_id}_{experiment_id}"
+        input_name_list, label_name_list = self.save_multi_process(frames_clips, bvps_clips, filename)
+        file_list_dict[i] = input_name_list
         
 
     def load_preprocessed_data(self):
@@ -288,6 +286,65 @@ class SPO2Loader(BaseLoader):
         self.inputs = inputs_face    
         self.labels = labels_bvp
         self.preprocessed_data_len = len(inputs_face)
+        
+    def __len__(self):
+        # In raw-on-the-fly mode, length equals number of raw videos discovered
+        if getattr(self, 'raw_mode', False):
+            return len(self.raw_data_dirs)
+        return super().__len__()
+
+    def __getitem__(self, index):
+        # Raw-on-the-fly behaviour: read raw video + csvs, preprocess and return first chunk
+        if getattr(self, 'raw_mode', False):
+            entry = self.raw_data_dirs[index]
+            video_file = entry['path']
+            frames = self.read_video(video_file)
+            video_dir = os.path.dirname(video_file)
+
+            # timestamps and bvp
+            timestamp_file = os.path.join(video_dir, 'frames_timestamp.csv')
+            bvp_file = os.path.join(video_dir, 'BVP.csv')
+            frame_timestamps = None
+            try:
+                frame_timestamps = self.read_frame_timestamps(timestamp_file)
+            except Exception:
+                pass
+            bvp_timestamps, bvp_values = (None, None)
+            try:
+                bvp_timestamps, bvp_values = self.read_bvp(bvp_file)
+            except Exception:
+                pass
+
+            if frame_timestamps is not None and bvp_timestamps is not None and bvp_values is not None:
+                resampled_bvp = self.synchronize_and_resample(bvp_timestamps, bvp_values, frame_timestamps)
+            else:
+                # If timestamps missing, fall back to zeros with matching length
+                resampled_bvp = np.zeros(frames.shape[0], dtype=np.float32)
+
+            # Use preprocess settings provided by config (user may set DO_CHUNK=False, DO_CROP_FACE=False etc.)
+            frames_clips, bvps_clips = self.preprocess(frames, resampled_bvp, self.config_data.PREPROCESS)
+
+            # take first clip by default
+            data = frames_clips[0]
+            label = bvps_clips[0]
+
+            # align format with BaseLoader.__getitem__ expectations
+            if self.data_format == 'NDCHW':
+                data = np.transpose(data, (0, 3, 1, 2))
+            elif self.data_format == 'NCDHW':
+                data = np.transpose(data, (3, 0, 1, 2))
+            elif self.data_format == 'NDHWC':
+                pass
+
+            data = np.float32(data)
+            label = np.float32(label)
+
+            filename = f"{entry['subject']}_{entry['index']}"
+            chunk_id = '0'
+            return data, label, filename, chunk_id
+
+        return super().__getitem__(index)
+
 
     @staticmethod
     def read_bvp(bvp_file):
@@ -311,14 +368,16 @@ class SPO2Loader(BaseLoader):
         return resampled_data
 
     @staticmethod
-    def read_video(video_file):
-        """Reads a video file, returns frames."""
-        VidObj = cv2.VideoCapture(video_file)
-        VidObj.set(cv2.CAP_PROP_POS_MSEC, 0)
-        success, frame = VidObj.read()
+    def read_video(video_file, frame_skip=1):  # ← 每x帧取1帧
+        cap = cv2.VideoCapture(video_file)
         frames = []
+        i = 0
+        success, frame = cap.read()
         while success:
-            frame = cv2.cvtColor(np.array(frame), cv2.COLOR_BGR2RGB)
-            frames.append(frame)
-            success, frame = VidObj.read()
-        return np.array(frames)
+            if i % frame_skip == 0:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(frame)
+            success, frame = cap.read()
+            i += 1
+        cap.release()
+        return np.array(frames, dtype=np.uint8)

@@ -75,6 +75,27 @@ class PhysFormerTrainer(BaseTrainer):
         else:
             raise ValueError("Physformer trainer initialized in incorrect toolbox mode!")
 
+    def _ensure_physformer_input(self, data):
+        """Ensure tensor is N,C,T,H,W and channel in {1,3}. Drop 4th channel if present.
+        This handles cases where loader returns N,T,C,H,W or provides 4-channel data (RGBA).
+        """
+        try:
+            if not isinstance(data, torch.Tensor):
+                return data
+            # expect 5-d tensor
+            if data.dim() == 5:
+                # If loader returned N,T,C,H,W -> permute to N,C,T,H,W
+                # Heuristic: if dim1 is not channel-like but dim2 is
+                if data.size(1) not in (1, 3, 4) and data.size(2) in (1, 3, 4):
+                    data = data.permute(0, 2, 1, 3, 4).contiguous()
+                # If RGBA, keep only RGB
+                if data.size(1) == 4:
+                    data = data[:, :3, ...].contiguous()
+        except Exception:
+            # if anything goes wrong, return original data
+            return data
+        return data
+
 
     def train(self, data_loader):
         """Training routine for model"""
@@ -105,6 +126,13 @@ class PhysFormerTrainer(BaseTrainer):
             for idx, batch in enumerate(tbar):
                 hr = torch.tensor([self.get_hr(i, sr=self.frame_rate) for i in batch[1]]).float().to(self.device)
                 data, label = batch[0].float().to(self.device), batch[1].float().to(self.device)
+
+                # Ensure data layout and channel count are compatible with PhysFormer (N,C,T,H,W, C in {1,3})
+                data = self._ensure_physformer_input(data)
+                try:
+                    print("DEBUG PhysFormerTrainer (train): data.shape after ensure:", tuple(data.shape))
+                except Exception:
+                    pass
 
                 self.optimizer.zero_grad()
 
@@ -194,6 +222,11 @@ class PhysFormerTrainer(BaseTrainer):
             vbar = tqdm(data_loader["valid"], ncols=80)
             for val_idx, val_batch in enumerate(vbar):
                 data, label = val_batch[0].float().to(self.device), val_batch[1].float().to(self.device)
+                data = self._ensure_physformer_input(data)
+                try:
+                    print("DEBUG PhysFormerTrainer (valid): data.shape after ensure:", tuple(data.shape))
+                except Exception:
+                    pass
                 gra_sharp = 2.0
                 rPPG, _, _, _ = self.model(data, gra_sharp)
                 rPPG = (rPPG-torch.mean(rPPG, axis=-1).view(-1, 1))/torch.std(rPPG).view(-1, 1)
@@ -244,6 +277,11 @@ class PhysFormerTrainer(BaseTrainer):
                 batch_size = test_batch[0].shape[0]
                 data, label = test_batch[0].to(
                     self.config.DEVICE), test_batch[1].to(self.config.DEVICE)
+                data = self._ensure_physformer_input(data)
+                try:
+                    print("DEBUG PhysFormerTrainer (test): data.shape after ensure:", tuple(data.shape))
+                except Exception:
+                    pass
                 gra_sharp = 2.0
                 pred_ppg_test, _, _, _ = self.model(data, gra_sharp)
                 for idx in range(batch_size):

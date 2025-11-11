@@ -68,8 +68,9 @@ def merge_last(x, n_dims):
 
 class MultiHeadedSelfAttention_TDC_gra_sharp(nn.Module):
     """Multi-Headed Dot Product Attention with depth-wise Conv3d"""
-    def __init__(self, dim, num_heads, dropout, theta):
+    def __init__(self, dim, num_heads, dropout, theta, gt, gh, gw):
         super().__init__()
+        self.gt, self.gh, self.gw = gt, gh, gw
         
         self.proj_q = nn.Sequential(
             CDC_T(dim, dim, 3, stride=1, padding=1, groups=1, bias=False, theta=theta),  
@@ -96,7 +97,7 @@ class MultiHeadedSelfAttention_TDC_gra_sharp(nn.Module):
         # (B, S, D) -proj-> (B, S, D) -split-> (B, S, H, W) -trans-> (B, H, S, W)
         
         [B, P, C]=x.shape
-        x = x.transpose(1, 2).view(B, C, P//16, 4, 4)      # [B, dim, 40, 4, 4]
+        x = x.transpose(1, 2).view(B, C, self.gt, self.gh, self.gw) # [B, dim, 40, 4, 4] × remove hardcoded size
         q, k, v = self.proj_q(x), self.proj_k(x), self.proj_v(x)
         q = q.flatten(2).transpose(1, 2)  # [B, 4*4*40, dim]
         k = k.flatten(2).transpose(1, 2)  # [B, 4*4*40, dim]
@@ -119,9 +120,10 @@ class MultiHeadedSelfAttention_TDC_gra_sharp(nn.Module):
 
 class PositionWiseFeedForward_ST(nn.Module):
     """FeedForward Neural Networks for each position"""
-    def __init__(self, dim, ff_dim):
+    def __init__(self, dim, ff_dim, gt, gh, gw):
         super().__init__()
-        
+        self.gt, self.gh, self.gw = gt, gh, gw
+
         self.fc1 = nn.Sequential(
             nn.Conv3d(dim, ff_dim, 1, stride=1, padding=0, bias=False),  
             nn.BatchNorm3d(ff_dim),
@@ -141,22 +143,22 @@ class PositionWiseFeedForward_ST(nn.Module):
 
     def forward(self, x):    # [B, 4*4*40, 128]
         [B, P, C]=x.shape
-        x = x.transpose(1, 2).view(B, C, P//16, 4, 4)      # [B, dim, 40, 4, 4]
+        x = x.transpose(1, 2).view(B, C, self.gt, self.gh, self.gw) # [B, dim, 40, 4, 4] × remove hardcoded size
         x = self.fc1(x)		              # x [B, ff_dim, 40, 4, 4]
         x = self.STConv(x)		          # x [B, ff_dim, 40, 4, 4]
-        x = self.fc2(x)		              # x [B, dim, 40, 4, 4]
+        x = self.fc2(x)		              # x [B, dim, 40, 4, 4] × remove hardcoded size
         x = x.flatten(2).transpose(1, 2)  # [B, 4*4*40, dim]
         
         return x
 
 class Block_ST_TDC_gra_sharp(nn.Module):
     """Transformer Block"""
-    def __init__(self, dim, num_heads, ff_dim, dropout, theta):
+    def __init__(self, dim, num_heads, ff_dim, dropout, theta, gt, gh, gw):
         super().__init__()
-        self.attn = MultiHeadedSelfAttention_TDC_gra_sharp(dim, num_heads, dropout, theta)
+        self.attn = MultiHeadedSelfAttention_TDC_gra_sharp(dim, num_heads, dropout, theta, gt, gh, gw)
         self.proj = nn.Linear(dim, dim)
         self.norm1 = nn.LayerNorm(dim, eps=1e-6)
-        self.pwff = PositionWiseFeedForward_ST(dim, ff_dim)
+        self.pwff = PositionWiseFeedForward_ST(dim, ff_dim, gt, gh, gw)
         self.norm2 = nn.LayerNorm(dim, eps=1e-6)
         self.drop = nn.Dropout(dropout)
 
@@ -170,10 +172,12 @@ class Block_ST_TDC_gra_sharp(nn.Module):
 
 class Transformer_ST_TDC_gra_sharp(nn.Module):
     """Transformer with Self-Attentive Blocks"""
-    def __init__(self, num_layers, dim, num_heads, ff_dim, dropout, theta):
+    def __init__(self, num_layers, dim, num_heads, ff_dim, dropout, theta, gt, gh, gw):
         super().__init__()
         self.blocks = nn.ModuleList([
-            Block_ST_TDC_gra_sharp(dim, num_heads, ff_dim, dropout, theta) for _ in range(num_layers)])
+            Block_ST_TDC_gra_sharp(dim, num_heads, ff_dim, dropout, theta, gt, gh, gw)
+            for _ in range(num_layers)
+        ])
 
     def forward(self, x, gra_sharp):
         for block in self.blocks:
@@ -221,13 +225,13 @@ class ViT_ST_ST_Compact3_TDC_gra_sharp(nn.Module):
         
         # Transformer
         self.transformer1 = Transformer_ST_TDC_gra_sharp(num_layers=num_layers//3, dim=dim, num_heads=num_heads, 
-                                       ff_dim=ff_dim, dropout=dropout_rate, theta=theta)
+                                       ff_dim=ff_dim, dropout=dropout_rate, theta=theta, gt=gt, gh=gh, gw=gw,)
         # Transformer
         self.transformer2 = Transformer_ST_TDC_gra_sharp(num_layers=num_layers//3, dim=dim, num_heads=num_heads, 
-                                       ff_dim=ff_dim, dropout=dropout_rate, theta=theta)
+                                       ff_dim=ff_dim, dropout=dropout_rate, theta=theta, gt=gt, gh=gh, gw=gw,)
         # Transformer
         self.transformer3 = Transformer_ST_TDC_gra_sharp(num_layers=num_layers//3, dim=dim, num_heads=num_heads, 
-                                       ff_dim=ff_dim, dropout=dropout_rate, theta=theta)
+                                       ff_dim=ff_dim, dropout=dropout_rate, theta=theta, gt=gt, gh=gh, gw=gw)
         
         
         
@@ -279,8 +283,30 @@ class ViT_ST_ST_Compact3_TDC_gra_sharp(nn.Module):
                     nn.init.normal_(m.bias, std=1e-6)  # nn.init.constant(m.bias, 0)
         self.apply(_init)
 
+    def _set_transformer_grid(self, gt, gh, gw):
+        """Update per-block grid sizes based on actual tensor shape after stem+patch.
+        This ensures attention/MLP 3D views match runtime tokenization.
+        """
+        for tr in [self.transformer1, self.transformer2, self.transformer3]:
+            for blk in tr.blocks:
+                # Attention
+                if hasattr(blk, 'attn'):
+                    blk.attn.gt = gt
+                    blk.attn.gh = gh
+                    blk.attn.gw = gw
+                # Position-wise FFN
+                if hasattr(blk, 'pwff'):
+                    blk.pwff.gt = gt
+                    blk.pwff.gh = gh
+                    blk.pwff.gw = gw
+
 
     def forward(self, x, gra_sharp):
+        # DEBUG: inspect input
+        try:
+            print("DEBUG PhysFormer.forward: input type:", type(x), "shape:", getattr(x, 'shape', None), "dtype:", getattr(x, 'dtype', None))
+        except Exception:
+            pass
 
         # b is batch number, c channels, t frame, fh frame height, and fw frame width
         b, c, t, fh, fw = x.shape
@@ -289,8 +315,11 @@ class ViT_ST_ST_Compact3_TDC_gra_sharp(nn.Module):
         x = self.Stem1(x)
         x = self.Stem2(x)  # [B, 64, 160, 64, 64]
         
-        x = self.patch_embedding(x)  # [B, 64, 40, 4, 4]
-        x = x.flatten(2).transpose(1, 2)  # [B, 40*4*4, 64]
+        x = self.patch_embedding(x)  # -> [B, dim, gt, gh, gw] after patching
+        # Infer actual grid sizes after stem + patch and propagate to transformer blocks
+        gt, gh, gw = x.size(2), x.size(3), x.size(4)
+        self._set_transformer_grid(gt, gh, gw)
+        x = x.flatten(2).transpose(1, 2)  # [B, gt*gh*gw, dim]
         
         
         Trans_features, Score1 =  self.transformer1(x, gra_sharp)  # [B, 4*4*40, 64]
@@ -298,8 +327,16 @@ class ViT_ST_ST_Compact3_TDC_gra_sharp(nn.Module):
         Trans_features3, Score3 =  self.transformer3(Trans_features2, gra_sharp)  # [B, 4*4*40, 64]
         
         # upsampling heads
-        #features_last = Trans_features3.transpose(1, 2).view(b, self.dim, 40, 4, 4) # [B, 64, 40, 4, 4]
-        features_last = Trans_features3.transpose(1, 2).view(b, self.dim, t//4, 4, 4) # [B, 64, 40, 4, 4]
+        # Debug intermediate shapes before reshape
+        try:
+            print("DEBUG PhysFormer: Trans_features3.shape:", getattr(Trans_features3, 'shape', None))
+            tmp = Trans_features3.transpose(1, 2)
+            print("DEBUG PhysFormer: after transpose shape:", getattr(tmp, 'shape', None), "using (gt,gh,gw)=", (gt, gh, gw))
+        except Exception:
+            pass
+
+        # Reshape back using the actual grid sizes inferred above
+        features_last = Trans_features3.transpose(1, 2).view(b, self.dim, gt, gh, gw)
         
         features_last = self.upsample(features_last)		    # x [B, 64, 7*7, 80]
         features_last = self.upsample2(features_last)		    # x [B, 32, 7*7, 160]

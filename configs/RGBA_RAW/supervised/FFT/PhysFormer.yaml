@@ -1,0 +1,125 @@
+BASE: ['']
+TOOLBOX_MODE: "train_and_test"      # "train_and_test"  or "only_test"
+TRAIN:
+  BATCH_SIZE:  2
+  EPOCHS: 30
+
+  LR: 9e-3
+  MODEL_FILE_NAME: SpO2_PhysFormer_FFT
+  PLOT_LOSSES_AND_LR: True
+  DATA:
+    FS: 30
+    DATASET: SPO2 
+    DO_PREPROCESS: False          # if first time, should be true
+    DATA_FORMAT: NCDHW  #NDCHW   NCDHW
+    DATA_PATH: "/root/shared/SpO2-Dataset"  
+    FILE_LIST: "/root/jjt/file_list_new.csv"
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache"       # Processed dataset save path, need to be updated
+    VIDEO_TYPE: "RGBA_ROI"   # 
+    EXP_DATA_NAME: ""
+    BEGIN: 0.0
+    END: 0.7
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized']
+      DATA_AUG: ['None']    # 'None' or 'Motion' is supported, used if the data path points to an augmented dataset or requires augmentation
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 128
+      CROP_FACE:
+        DO_CROP_FACE: False
+        BACKEND: 'HC'    # HC for Haar Cascade, RF for RetinaFace
+        USE_LARGE_FACE_BOX: False
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 32
+          USE_MEDIAN_FACE_BOX: False    # This should be used ONLY if dynamic detection is used
+      RESIZE:
+        H: 64
+        W: 64
+VALID:
+  DATA:
+    FS: 30
+    DATASET: SPO2
+    DO_PREPROCESS: False              # if first time, should be true
+    DATA_FORMAT: NCDHW
+    DATA_PATH: "/root/shared/SpO2-Dataset"      # Raw dataset path, need to be updated
+    FILE_LIST: "/root/jjt/file_list_new.csv"
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache"    # Processed dataset save path, need to be updated
+    VIDEO_TYPE: "RGBA_ROI"  
+    EXP_DATA_NAME: ""
+    BEGIN: 0.7
+    END: 0.85          
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized']
+      DATA_AUG: ['None']    # 'None' or 'Motion' is supported, used if the data path points to an augmented dataset or requires augmentation
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 128
+      CROP_FACE:
+        DO_CROP_FACE: False
+        BACKEND: 'HC'    # HC for Haar Cascade, RF for RetinaFace
+        USE_LARGE_FACE_BOX: False
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 32
+          USE_MEDIAN_FACE_BOX: False    # This should be used ONLY if dynamic detection is used
+      RESIZE:
+        H: 64
+        W: 64
+TEST:
+  METRICS: ['MAE', 'RMSE', 'MAPE', 'Pearson', 'SNR', 'BA']
+  USE_LAST_EPOCH: False                      # to use provided validation dataset to find the best epoch, should be false
+  DATA:
+    FS: 30
+    DATASET: SPO2         #SUMS HMS HMD
+    DO_PREPROCESS: False     # if first time, should be true
+    DATA_FORMAT: NCDHW
+    DATA_PATH: "/root/shared/SpO2-Dataset" #"/data03/lk/rppg-toolbox/QHU_SPO2"                     # Raw dataset path, need to be updated
+    FILE_LIST: "/root/jjt/file_list_new.csv"
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache"  # "/data03/lk/mxl/train"   # Processed dataset save path, need to be updated
+    VIDEO_TYPE: "RGBA_ROI"  
+    EXP_DATA_NAME: ""
+    BEGIN: 0.85
+    END: 1.0
+    PREPROCESS:
+      DATA_TYPE: ['DiffNormalized']
+      DATA_AUG: ['None']    # 'None' or 'Motion' is supported, used if the data path points to an augmented dataset or requires augmentation
+      LABEL_TYPE: DiffNormalized
+      DO_CHUNK: True
+      CHUNK_LENGTH: 128
+      CROP_FACE:
+        DO_CROP_FACE: False
+        BACKEND: 'HC'    # HC for Haar Cascade, RF for RetinaFace
+        USE_LARGE_FACE_BOX: False
+        LARGE_BOX_COEF: 1.5
+        DETECTION:
+          DO_DYNAMIC_DETECTION: False
+          DYNAMIC_DETECTION_FREQUENCY: 32
+          USE_MEDIAN_FACE_BOX: False    # This should be used ONLY if dynamic detection is used
+      RESIZE:
+        H: 64
+        W: 64
+DEVICE: cuda:1
+NUM_OF_GPU_TRAIN: 1
+LOG:
+  PATH: runs/exp
+MODEL:
+  DROP_RATE: 0.1
+  NAME: PhysFormer
+  PHYSFORMER:         # Probably need to update these in some meaningful way
+    PATCH_SIZE: 4
+    DIM: 96
+    FF_DIM: 144
+    NUM_HEADS: 4
+    NUM_LAYERS: 12
+    THETA: 0.7
+INFERENCE:
+  BATCH_SIZE: 1
+  EVALUATION_METHOD: "FFT"        # "FFT" or "peak detection"
+  EVALUATION_WINDOW:
+    USE_SMALLER_WINDOW: False        # Change this if you'd like an evaluation window smaller than the test video length
+    WINDOW_SIZE: 10        # In seconds
+  MODEL_PATH:   ""
+

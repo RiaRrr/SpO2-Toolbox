@@ -238,16 +238,8 @@ class BaseLoader(Dataset):
             frame_clips(np.array): processed video data by frames
             bvps_clips(np.array): processed bvp (ppg) labels by frames
         """
-        # By default skip expensive crop/resize/face-detection unless explicitly enabled.
-        # This avoids running YOLO/OpenCV face detection and large resize operations during preprocessing.
-        enable_crop_resize = False
-        try:
-            enable_crop_resize = bool(config_preprocess.CROP_FACE.ENABLE)
-        except Exception:
-            enable_crop_resize = False
 
-        if enable_crop_resize:
-            frames = self.crop_face_resize(
+        frames = self.crop_face_resize(
                 frames,
                 config_preprocess.CROP_FACE.DO_CROP_FACE,
                 config_preprocess.CROP_FACE.BACKEND,
@@ -258,9 +250,6 @@ class BaseLoader(Dataset):
                 config_preprocess.CROP_FACE.DETECTION.USE_MEDIAN_FACE_BOX,
                 config_preprocess.RESIZE.W,
                 config_preprocess.RESIZE.H)
-        else:
-            # keep original frames (no cropping/resizing)
-            pass
 
         # We'll perform heavy array transforms on GPU per-chunk to reduce CPU load/RAM.
         # Process in non-overlapping chunks of CHUNK_LENGTH for memory safety.

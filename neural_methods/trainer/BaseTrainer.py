@@ -5,6 +5,7 @@ from matplotlib.ticker import ScalarFormatter, MaxNLocator
 import os
 import csv
 import pickle
+import numpy as np
 
 
 class BaseTrainer:
@@ -127,55 +128,91 @@ class BaseTrainer:
             print(f"WARN: failed to save best model: {e}")
 
     def plot_losses_and_lrs(self, train_loss, valid_loss, lrs, config):
-
-        output_dir = os.path.join(config.LOG.PATH, config.TRAIN.DATA.EXP_DATA_NAME, 'plots')
+        """Plot training/validation losses and LR schedule.
+        - Prefers saving under SPO2_RUN_ROOT/plots if available.
+        - Flattens LR lists (e.g., OneCycleLR returns a list per step) to scalars.
+        - Robust to empty/mismatched inputs.
+        """
+        # Prefer unified run root if available
+        run_root = os.environ.get('SPO2_RUN_ROOT')
+        output_dir = os.path.join(run_root, 'plots') if run_root else os.path.join(
+            config.LOG.PATH, getattr(config.TRAIN.DATA, 'EXP_DATA_NAME', ''), 'plots'
+        )
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
 
         # Filename ID to be used in plots that get saved
         if config.TOOLBOX_MODE == 'train_and_test':
-            filename_id = self.model_file_name
+            filename_id = getattr(self, 'model_file_name', 'model')
         else:
             raise ValueError('Metrics.py evaluation only supports train_and_test and only_test!')
-        
-        # Create a single plot for training and validation losses
-        plt.figure(figsize=(10, 6))
-        epochs = range(0, len(train_loss))  # Integer values for x-axis
-        plt.plot(epochs, train_loss, label='Training Loss')
-        if len(valid_loss) > 0:
-            plt.plot(epochs, valid_loss, label='Validation Loss')
+
+        # Guard inputs
+        train_loss = list(train_loss or [])
+        valid_loss = list(valid_loss or [])
+
+        # Plot training and validation losses
+        if len(train_loss) == 0:
+            print('WARN: No training loss values to plot. Skipping loss plot.')
         else:
-            print("The list of validation losses is empty. The validation loss will not be plotted!")
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title(f'{filename_id} Losses')
-        plt.legend()
-        plt.xticks(epochs)
+            plt.figure(figsize=(10, 6))
+            epochs = range(0, len(train_loss))
+            plt.plot(epochs, train_loss, label='Training Loss')
+            if len(valid_loss) > 0:
+                # If lengths mismatch, align to min length to avoid shape errors
+                if len(valid_loss) != len(train_loss):
+                    m = min(len(valid_loss), len(train_loss))
+                    print(f'INFO: Aligning valid/train loss lengths ({len(valid_loss)} vs {len(train_loss)}) to {m}.')
+                    plt.plot(range(m), valid_loss[:m], label='Validation Loss')
+                else:
+                    plt.plot(epochs, valid_loss, label='Validation Loss')
+            else:
+                print('INFO: Validation loss list is empty. Only training loss will be plotted.')
+            plt.xlabel('Epoch')
+            plt.ylabel('Loss')
+            plt.title(f'{filename_id} Losses')
+            plt.legend()
+            plt.xticks(epochs)
+            ax = plt.gca()
+            ax.yaxis.set_major_locator(MaxNLocator(integer=False, prune='both'))
+            loss_plot_filename = os.path.join(output_dir, filename_id + '_losses.pdf')
+            plt.savefig(loss_plot_filename, dpi=300)
+            plt.close()
 
-        # Set y-axis ticks with more granularity
-        ax = plt.gca()
-        ax.yaxis.set_major_locator(MaxNLocator(integer=False, prune='both'))
+        # Flatten/normalize LR list for plotting
+        flat_lrs = []
+        for v in (lrs or []):
+            try:
+                # Common case: list/tuple/ndarray from get_last_lr()
+                if isinstance(v, (list, tuple)):
+                    if len(v) > 0:
+                        flat_lrs.append(float(v[0]))
+                elif 'numpy' in str(type(v)):
+                    arr = np.array(v).reshape(-1)
+                    if arr.size > 0:
+                        flat_lrs.append(float(arr[0]))
+                elif isinstance(v, torch.Tensor):
+                    flat_lrs.append(float(v.flatten()[0].item()))
+                else:
+                    flat_lrs.append(float(v))
+            except Exception:
+                continue
 
-        loss_plot_filename = os.path.join(output_dir, filename_id + '_losses.pdf')
-        plt.savefig(loss_plot_filename, dpi=300)
-        plt.close()
-
-        # Create a separate plot for learning rates
-        plt.figure(figsize=(6, 4))
-        scheduler_steps = range(0, len(lrs))
-        plt.plot(scheduler_steps, lrs, label='Learning Rate')
-        plt.xlabel('Scheduler Step')
-        plt.ylabel('Learning Rate')
-        plt.title(f'{filename_id} LR Schedule')
-        plt.legend()
-
-        # Set y-axis values in scientific notation
-        ax = plt.gca()
-        ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True, useOffset=False))
-        ax.ticklabel_format(axis='y', style='sci', scilimits=(0,0))  # Force scientific notation
-
-        lr_plot_filename = os.path.join(output_dir, filename_id + '_learning_rates.pdf')
-        plt.savefig(lr_plot_filename, bbox_inches='tight', dpi=300)
-        plt.close()
+        if len(flat_lrs) == 0:
+            print('WARN: No learning rate values to plot. Skipping LR plot.')
+        else:
+            plt.figure(figsize=(6, 4))
+            scheduler_steps = range(0, len(flat_lrs))
+            plt.plot(scheduler_steps, flat_lrs, label='Learning Rate')
+            plt.xlabel('Scheduler Step')
+            plt.ylabel('Learning Rate')
+            plt.title(f'{filename_id} LR Schedule')
+            plt.legend()
+            ax = plt.gca()
+            ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True, useOffset=False))
+            ax.ticklabel_format(axis='y', style='sci', scilimits=(0,0))
+            lr_plot_filename = os.path.join(output_dir, filename_id + '_learning_rates.pdf')
+            plt.savefig(lr_plot_filename, bbox_inches='tight', dpi=300)
+            plt.close()
 
         print('Saving plots of losses and learning rates to:', output_dir)

@@ -86,9 +86,10 @@ class BigSmallTrainer(BaseTrainer):
 
 
     def save_model(self, index):
-        if not os.path.exists(self.model_dir):
-            os.makedirs(self.model_dir)
-        model_path = os.path.join(self.model_dir, self.model_file_name + '_Epoch' + str(index) + '.pth')
+        target_dir = self._resolve_model_dir()
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir, exist_ok=True)
+        model_path = os.path.join(target_dir, self.model_file_name + '_Epoch' + str(index) + '.pth')
         torch.save(self.model.state_dict(), model_path)
         print('Saved Model Path: ', model_path)
         print('')
@@ -405,7 +406,8 @@ class BigSmallTrainer(BaseTrainer):
 
         # IF USING MODEL FROM TRAINING
         else:
-            model_path = os.path.join(self.model_dir, 
+            resolved_dir = self._resolve_model_dir()
+            model_path = os.path.join(resolved_dir, 
                                            self.model_file_name + '_Epoch' + str(self.used_epoch) + '.pth')
             print("Testing uses non-pretrained model!")
             print('Model path:', model_path)

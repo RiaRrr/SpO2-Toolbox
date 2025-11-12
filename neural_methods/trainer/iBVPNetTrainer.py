@@ -177,15 +177,17 @@ class iBVPNetTrainer(BaseTrainer):
             print("Testing uses pretrained model!")
             print(self.config.INFERENCE.MODEL_PATH)
         else:
-            if self.config.TEST.USE_LAST_EPOCH:
+            if self.config.TEST.USE_LAST_EPOCH: 
+                resolved_dir = self._resolve_model_dir()
                 last_epoch_model_path = os.path.join(
-                self.model_dir, self.model_file_name + '_Epoch' + str(self.max_epoch_num - 1) + '.pth')
+                resolved_dir, self.model_file_name + '_Epoch' + str(self.max_epoch_num - 1) + '.pth')
                 print("Testing uses last epoch as non-pretrained model!")
                 print(last_epoch_model_path)
                 self.model.load_state_dict(torch.load(last_epoch_model_path))
             else:
+                resolved_dir = self._resolve_model_dir()
                 best_model_path = os.path.join(
-                    self.model_dir, self.model_file_name + '_Epoch' + str(self.best_epoch) + '.pth')
+                    resolved_dir, self.model_file_name + '_Epoch' + str(self.best_epoch) + '.pth')
                 print("Testing uses best epoch selected using model selection as non-pretrained model!")
                 print(best_model_path)
                 self.model.load_state_dict(torch.load(best_model_path))
@@ -230,9 +232,10 @@ class iBVPNetTrainer(BaseTrainer):
             self.save_test_outputs(predictions, labels, self.config)
 
     def save_model(self, index):
-        if not os.path.exists(self.model_dir):
-            os.makedirs(self.model_dir)
+        target_dir = self._resolve_model_dir()
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir, exist_ok=True)
         model_path = os.path.join(
-            self.model_dir, self.model_file_name + '_Epoch' + str(index) + '.pth')
+            target_dir, self.model_file_name + '_Epoch' + str(index) + '.pth')
         torch.save(self.model.state_dict(), model_path)
         print('Saved Model Path: ', model_path)

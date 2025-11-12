@@ -61,6 +61,20 @@ class BaseTrainer:
         except Exception as e:
             print(f"WARN: failed to append CSV row: {e}")
 
+    def _resolve_model_dir(self):
+        """Return the directory to save model checkpoints.
+        Prefers SPO2_RUN_ROOT/PreTrainedModels when available; falls back to self.model_dir.
+        """
+        run_root = os.environ.get('SPO2_RUN_ROOT', None)
+        if run_root:
+            target = os.path.join(run_root, 'PreTrainedModels')
+            try:
+                os.makedirs(target, exist_ok=True)
+            except Exception:
+                pass
+            return target
+        return getattr(self, 'model_dir', '.')
+
     def train(self, data_loader):
         pass
 
@@ -71,8 +85,9 @@ class BaseTrainer:
         pass
 
     def save_test_outputs(self, predictions, labels, config):
-    
-        output_dir = config.TEST.OUTPUT_SAVE_DIR
+        # Prefer unified run root/saved_test_outputs if provided
+        run_root = os.environ.get('SPO2_RUN_ROOT', None)
+        output_dir = os.path.join(run_root, 'saved_test_outputs') if run_root else config.TEST.OUTPUT_SAVE_DIR
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
         
@@ -100,11 +115,12 @@ class BaseTrainer:
     def save_best_model(self):
         """Save a snapshot of the current model as best_model.pth in self.model_dir."""
         try:
-            if not hasattr(self, 'model') or not hasattr(self, 'model_dir'):
+            if not hasattr(self, 'model'):
                 return
-            if not os.path.exists(self.model_dir):
-                os.makedirs(self.model_dir, exist_ok=True)
-            best_path = os.path.join(self.model_dir, 'best_model.pth')
+            target_dir = self._resolve_model_dir()
+            if not os.path.exists(target_dir):
+                os.makedirs(target_dir, exist_ok=True)
+            best_path = os.path.join(target_dir, 'best_model.pth')
             torch.save(self.model.state_dict(), best_path)
             print('Saved Best Model Path: ', best_path)
         except Exception as e:

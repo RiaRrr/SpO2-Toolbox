@@ -192,9 +192,21 @@ if __name__ == "__main__":
         else:
             exp_setting = config.TRAIN.MODEL_FILE_NAME if hasattr(config.TRAIN, 'MODEL_FILE_NAME') else config.TRAIN.DATA.EXP_DATA_NAME
             exp_name_for_log = exp_setting + "_" + exp_name_for_log
-        log_dir = os.path.join(config.LOG.PATH, exp_name_for_log, 'log')
-        os.makedirs(log_dir, exist_ok=True)
+        # Unified run root and subfolders under LOG.PATH/exp_name_for_log
+        run_root = os.path.join(config.LOG.PATH, exp_name_for_log)
+        log_dir = os.path.join(run_root, 'log')
+        model_dir = os.path.join(run_root, 'PreTrainedModels')
+        test_outputs_dir = os.path.join(run_root, 'saved_test_outputs')
+        bland_altman_dir = os.path.join(run_root, 'bland_altman_plots')
+
+        # Create directories up-front
+        for d in (log_dir, model_dir, test_outputs_dir, bland_altman_dir):
+            os.makedirs(d, exist_ok=True)
         print("log_dir:",log_dir)
+
+        # Export env for downstream modules to discover paths
+        # SPO2_RUN_ROOT is the base folder for this run (parent of log/PreTrainedModels/etc.)
+        os.environ['SPO2_RUN_ROOT'] = run_root
         run_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
         log_file_path = os.path.join(log_dir, f"{run_ts}.log")
         log_fp = open(log_file_path, 'a', buffering=1)
@@ -203,6 +215,17 @@ if __name__ == "__main__":
         os.environ['SPO2_LOG_DIR'] = log_dir
         os.environ['SPO2_RUN_TS'] = run_ts
         os.environ['SPO2_CONFIG_FILE'] = getattr(args, 'config_file', '') or ''
+
+        # Normalize config paths so all artifacts land under the same run folder
+        try:
+            if hasattr(config, 'MODEL') and hasattr(config.MODEL, 'MODEL_DIR'):
+                config.MODEL.MODEL_DIR = model_dir
+            if hasattr(config, 'TEST') and hasattr(config.TEST, 'OUTPUT_SAVE_DIR'):
+                config.TEST.OUTPUT_SAVE_DIR = test_outputs_dir
+            # Some plotting code reads config.LOG.PATH + EXP_DATA_NAME; we leave LOG.PATH as root,
+            # but also provide an env hint and pre-create bland_altman_plots under run root.
+        except Exception:
+            pass
 
         # Write config file content and resolved config at the top of the log
         print(f"Logging to: {log_file_path}")

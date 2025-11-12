@@ -1,11 +1,11 @@
 BASE: ['']
 TOOLBOX_MODE: "train_and_test"      # "train_and_test"  or "only_test"
 TRAIN:
-  BATCH_SIZE:  2
+  BATCH_SIZE:  6
   EPOCHS: 30
 
   LR: 9e-3
-  MODEL_FILE_NAME: SpO2_PhysNet_FFT_RGBA_raw
+  MODEL_FILE_NAME: SpO2_PhysNet_FFT_RGBA_corrected
   PLOT_LOSSES_AND_LR: True
   DATA:
     FS: 30
@@ -14,8 +14,8 @@ TRAIN:
     DATA_FORMAT: NCDHW  #NDCHW   NCDHW
     DATA_PATH: "/root/shared/SpO2-Dataset"  
     FILE_LIST: "/root/jjt/file_list_new.csv"
-    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/physnet_rgba_roi/train"       # Processed dataset save path, need to be updated
-    VIDEO_TYPE: "RGBA_ROI"   # 
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/physnet_rgba_roi_corrected/train"       # Processed dataset save path, need to be updated
+    VIDEO_TYPE: "RGBA_ROI_corrected"   # 
     EXP_DATA_NAME: ""
     BEGIN: 0.0
     END: 0.7
@@ -45,8 +45,8 @@ VALID:
     DATA_FORMAT: NCDHW
     DATA_PATH: "/root/shared/SpO2-Dataset"      # Raw dataset path, need to be updated
     FILE_LIST: "/root/jjt/file_list_new.csv"
-    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/physnet_rgba_roi/valid"    # Processed dataset save path, need to be updated
-    VIDEO_TYPE: "RGBA_ROI"  
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/physnet_rgba_roi_corrected/valid"    # Processed dataset save path, need to be updated
+    VIDEO_TYPE: "RGBA_ROI_corrected"  
     EXP_DATA_NAME: ""
     BEGIN: 0.7
     END: 0.85          
@@ -78,8 +78,8 @@ TEST:
     DATA_FORMAT: NCDHW
     DATA_PATH: "/root/shared/SpO2-Dataset" #"/data03/lk/rppg-toolbox/QHU_SPO2"                     # Raw dataset path, need to be updated
     FILE_LIST: "/root/jjt/file_list_new.csv"
-    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/physnet_rgba_roi/test"  # "/data03/lk/mxl/train"   # Processed dataset save path, need to be updated
-    VIDEO_TYPE: "RGBA_ROI"  
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/physnet_rgba_roi_corrected/test"  # "/data03/lk/mxl/train"   # Processed dataset save path, need to be updated
+    VIDEO_TYPE: "RGBA_ROI_corrected"  
     EXP_DATA_NAME: ""
     BEGIN: 0.85
     END: 1.0
@@ -101,7 +101,7 @@ TEST:
       RESIZE:
         H: 64
         W: 64
-DEVICE: cuda:0
+DEVICE: cuda:2
 NUM_OF_GPU_TRAIN: 2
 LOG:
   PATH: runs/exp
@@ -111,7 +111,7 @@ MODEL:
   PHYSNET:
     FRAME_NUM: 128
 INFERENCE:
-  BATCH_SIZE: 2
+  BATCH_SIZE: 6
   EVALUATION_METHOD: "FFT"        # "FFT" or "peak detection"
   EVALUATION_WINDOW:
     USE_SMALLER_WINDOW: True        # Change this if you'd like an evaluation window smaller than the test video length

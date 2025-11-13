@@ -1,5 +1,10 @@
 """ The main function of rPPG deep learning pipeline."""
 
+import wandb  # type: ignore
+
+wandb_entity="2304956887-tsinghua-university"
+wandb_project="SPO2-toolbox"
+
 import argparse
 import random
 import time
@@ -57,6 +62,7 @@ class _StdoutStderrTee:
             self.log_fp.write(data)
         except Exception:
             pass
+        return len(data)  # 一些库会依赖返回写入字节数
 
     def flush(self):
         try:
@@ -67,6 +73,47 @@ class _StdoutStderrTee:
             self.log_fp.flush()
         except Exception:
             pass
+
+    # ---- 关键：补齐这些方法/属性 ----
+    def isatty(self):
+        # 让 wandb/click 认为和原生 stdout 同步
+        try:
+            return bool(getattr(self.original_stream, "isatty", lambda: False)())
+        except Exception:
+            return False
+
+    def fileno(self):
+        # 某些库会用到；尽量透传
+        if hasattr(self.original_stream, "fileno"):
+            try:
+                return self.original_stream.fileno()
+            except Exception:
+                pass
+        # 退化：返回常见的 stdout(1)/stderr(2)
+        return 1
+
+    @property
+    def encoding(self):
+        return getattr(self.original_stream, "encoding", "utf-8")
+
+    def readable(self):  # 供 io 接口探测
+        return False
+
+    def writable(self):
+        return True
+
+    def seekable(self):
+        return False
+
+def config_to_dict(cfg):
+    """Recursively convert yacs/namespace/config object to a pure Python dict."""
+    if isinstance(cfg, dict):
+        return {k: config_to_dict(v) for k, v in cfg.items()}
+    if hasattr(cfg, "__dict__"):  # yacs or objects
+        return {k: config_to_dict(v) for k, v in cfg.__dict__.items() if not k.startswith("_")}
+    if isinstance(cfg, (list, tuple)):
+        return [config_to_dict(v) for v in cfg]
+    return cfg
 
 
 def add_args(parser):
@@ -92,6 +139,8 @@ def add_args(parser):
       PURE_UNSUPERVISED.yaml
       UBFC-rPPG_UNSUPERVISED.yaml
     '''
+    # WandB flag: default enabled; use --no_wandb to disable
+    parser.add_argument('--no_wandb', action='store_true', help='Disable Weights & Biases logging (enabled by default).')
     return parser
 
 
@@ -211,7 +260,7 @@ if __name__ == "__main__":
         log_file_path = os.path.join(log_dir, f"{run_ts}.log")
         log_fp = open(log_file_path, 'a', buffering=1)
 
-        # Export for downstream modules (e.g., metrics) to discover
+    # Export for downstream modules (e.g., metrics) to discover
         os.environ['SPO2_LOG_DIR'] = log_dir
         os.environ['SPO2_RUN_TS'] = run_ts
         os.environ['SPO2_CONFIG_FILE'] = getattr(args, 'config_file', '') or ''
@@ -274,6 +323,36 @@ if __name__ == "__main__":
     except Exception as _log_ex:
         # If logging setup fails, continue without file logging
         print(f"Warning: logging initialization failed: {_log_ex}")
+
+    # Initialize Weights & Biases safely
+    use_wandb = not args.no_wandb
+    if use_wandb:
+        os.environ['SPO2_USE_WANDB'] = '1'
+
+        # ensure writable dir
+        wandb_dir = os.path.join(os.environ.get('SPO2_RUN_ROOT', '.'), f"wandb_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+        os.makedirs(wandb_dir, exist_ok=True)
+        os.environ['WANDB_DIR'] = wandb_dir
+
+        print(f"[W&B] Logging ENABLED at {wandb_dir}")
+
+        try:
+            wb_run = wandb.init(
+                entity=wandb_entity,
+                project=wandb_project,
+                name=exp_name_for_log if 'exp_name_for_log' in locals() else 'run',
+                resume="allow",  # instead of reinit=True
+            )
+            wandb.config.update({k: v for k, v in vars(args).items() if k != 'func'}, allow_val_change=True)
+            wandb.config["config_file_path"] = getattr(args, 'config_file', None)
+            # 加入完整 config
+            wandb.config.update(config_to_dict(config), allow_val_change=True)
+
+        except Exception as e:
+            print(f"[W&B] init failed: {e}")
+            use_wandb = False
+    else:
+        print("[W&B] Logging DISABLED.")
 
     print('Configuration:')
     print(config, end='\n\n')

@@ -52,15 +52,58 @@ class BaseTrainer:
 
     def _append_csv_row(self, row_dict):
         """Append a row to the unified CSV if initialized. Missing columns are filled with blanks."""
-        if not self.csv_path:
-            return
-        try:
-            row = {c: row_dict.get(c, '') for c in self._csv_columns}
-            with open(self.csv_path, 'a', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=self._csv_columns)
-                writer.writerow(row)
-        except Exception as e:
-            print(f"WARN: failed to append CSV row: {e}")
+        # Always try to log to CSV (if initialized) and optionally to WandB
+        row = {c: row_dict.get(c, '') for c in self._csv_columns}
+
+        if self.csv_path:
+            try:
+                with open(self.csv_path, 'a', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=self._csv_columns)
+                    writer.writerow(row)
+            except Exception as e:
+                print(f"WARN: failed to append CSV row: {e}")
+
+        # WandB logging (batch-wise & epoch summaries)
+        if os.environ.get('SPO2_USE_WANDB') == '1':
+            try:
+                import wandb  # local import to avoid hard dependency
+                log_payload = {}
+                # Map a subset of columns to wandb metrics
+                metric_keys = [
+                    'loss','NegPearson','fre_CEloss','kl_loss','hr_mae',
+                    'valid_loss','min_valid_loss','MAE','RMSE','MAPE','Pearson','SNR','MACC',
+                    'AU_AvgF1','AU_AvgPrec','AU_AvgAcc','Resp_MAE','Resp_RMSE','Resp_MAPE','Resp_Pearson','Resp_SNR'
+                ]
+                for k in metric_keys:
+                    v = row.get(k, '')
+                    if isinstance(v, (int, float)) or (isinstance(v, str) and v != ''):
+                        # attempt cast to float where possible
+                        try:
+                            log_payload[k] = float(v)
+                        except Exception:
+                            log_payload[k] = v
+                # Add context tags
+                if row.get('mode'):
+                    log_payload['mode'] = row['mode']
+                if row.get('epoch') not in ['', None]:
+                    try:
+                        log_payload['epoch'] = int(row['epoch'])
+                    except Exception:
+                        pass
+                if row.get('batch') not in ['', None]:
+                    try:
+                        log_payload['batch'] = int(row['batch'])
+                    except Exception:
+                        pass
+                if row.get('lr') not in ['', None]:
+                    try:
+                        log_payload['lr'] = float(row['lr'])
+                    except Exception:
+                        pass
+                if log_payload:
+                    wandb.log(log_payload)
+            except Exception as e:
+                print(f"WARN: wandb logging skipped: {e}")
 
     def _resolve_model_dir(self):
         """Return the directory to save model checkpoints.

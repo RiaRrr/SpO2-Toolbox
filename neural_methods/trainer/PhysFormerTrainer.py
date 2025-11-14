@@ -179,10 +179,11 @@ class PhysFormerTrainer(BaseTrainer):
                 loss_kl_avg_test.append(float(kl_loss.data))
                 loss_hr_mae.append(float(train_mae))
                 if idx % 100 == 99:  # print every 100 mini-batches
+                    current_lr = self.optimizer.param_groups[0]['lr']
                     print(f'\nepoch:{epoch}, batch:{idx + 1}, total:{len(data_loader["train"]) // self.batch_size}, '
-                        f'lr:0.0001, sharp:{gra_sharp:.3f}, a:{a:.3f}, NegPearson:{np.mean(loss_rPPG_avg[-2000:]):.4f}, '
+                        f'lr:{current_lr:.6f}, sharp:{gra_sharp:.3f}, a:{a:.3f}, NegPearson:{np.mean(loss_rPPG_avg[-2000:]):.4f}, '
                         f'\nb:{b:.3f}, kl:{np.mean(loss_kl_avg_test[-2000:]):.3f}, fre_CEloss:{np.mean(loss_peak_avg[-2000:]):.3f}, '
-                        f'hr_mae:{np.mean(loss_hr_mae[-2000:]):.3f}')
+                        f'hr_mae:{np.mean(loss_hr_mae[-2000:]):.3f}, total_loss:{float(loss.data):.4f}')
                 # Append per-batch training metrics row
                 self._append_csv_row({
                     'mode':'train',
@@ -196,6 +197,7 @@ class PhysFormerTrainer(BaseTrainer):
                     'fre_CEloss':float(fre_loss.data),
                     'kl_loss':float(kl_loss.data),
                     'hr_mae':float(train_mae),
+                    'loss':float(loss.data),
                 })
                     
             # Append the current learning rate to the list

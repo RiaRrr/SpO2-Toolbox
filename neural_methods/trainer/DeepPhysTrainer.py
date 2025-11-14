@@ -78,8 +78,8 @@ class DeepPhysTrainer(BaseTrainer):
                 data, labels = batch[0].to(
                     self.device), batch[1].to(self.device)
                 N, D, C, H, W = data.shape
-                data = data.view(N * D, C, H, W)
-                labels = labels.view(-1, 1)
+                data = data.contiguous().view(N * D, C, H, W)
+                labels = labels.contiguous().view(-1, 1)
                 self.optimizer.zero_grad()
                 pred_ppg = self.model(data)
                 loss = self.criterion(pred_ppg, labels)
@@ -146,8 +146,8 @@ class DeepPhysTrainer(BaseTrainer):
                 data_valid, labels_valid = valid_batch[0].to(
                     self.device), valid_batch[1].to(self.device)
                 N, D, C, H, W = data_valid.shape
-                data_valid = data_valid.view(N * D, C, H, W)
-                labels_valid = labels_valid.view(-1, 1)
+                data_valid = data_valid.contiguous().view(N * D, C, H, W)
+                labels_valid = labels_valid.contiguous().view(-1, 1)
                 pred_ppg_valid = self.model(data_valid)
                 loss = self.criterion(pred_ppg_valid, labels_valid)
                 valid_loss.append(loss.item())
@@ -200,8 +200,8 @@ class DeepPhysTrainer(BaseTrainer):
                 data_test, labels_test = test_batch[0].to(
                     self.config.DEVICE), test_batch[1].to(self.config.DEVICE)
                 N, D, C, H, W = data_test.shape
-                data_test = data_test.view(N * D, C, H, W)
-                labels_test = labels_test.view(-1, 1)
+                data_test = data_test.contiguous().view(N * D, C, H, W)
+                labels_test = labels_test.contiguous().view(-1, 1)
                 pred_ppg_test = self.model(data_test)
 
                 if self.config.TEST.OUTPUT_SAVE_DIR:

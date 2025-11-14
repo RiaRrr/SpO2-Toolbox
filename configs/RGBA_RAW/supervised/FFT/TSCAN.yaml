@@ -1,11 +1,11 @@
 BASE: ['']
 TOOLBOX_MODE: "train_and_test"      # "train_and_test"  or "only_test"
 TRAIN:
-  BATCH_SIZE:  4
+  BATCH_SIZE:  2
   EPOCHS: 30
 
   LR: 9e-3
-  MODEL_FILE_NAME: SpO2_DeepPhys_FFT_RGBA_raw
+  MODEL_FILE_NAME: SpO2_TSCAN_FFT_RGBA_raw
   PLOT_LOSSES_AND_LR: True
   DATA:
     FS: 30
@@ -14,7 +14,7 @@ TRAIN:
     DATA_FORMAT: NDCHW  #NDCHW   NCDHW
     DATA_PATH: "/root/shared/SpO2-Dataset"  
     FILE_LIST: "/root/jjt/file_list_new.csv"
-    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/deepphys_rgba_roi/train"       # Processed dataset save path, need to be updated
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/tscan_rgba_roi/train"       # Processed dataset save path, need to be updated
     VIDEO_TYPE: "RGBA_ROI"   # 
     EXP_DATA_NAME: ""
     BEGIN: 0.0
@@ -45,7 +45,7 @@ VALID:
     DATA_FORMAT: NDCHW
     DATA_PATH: "/root/shared/SpO2-Dataset"      # Raw dataset path, need to be updated
     FILE_LIST: "/root/jjt/file_list_new.csv"
-    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/deepphys_rgba_roi/valid"    # Processed dataset save path, need to be updated
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/tscan_rgba_roi/valid"    # Processed dataset save path, need to be updated
     VIDEO_TYPE: "RGBA_ROI"  
     EXP_DATA_NAME: ""
     BEGIN: 0.7
@@ -78,7 +78,7 @@ TEST:
     DATA_FORMAT: NDCHW
     DATA_PATH: "/root/shared/SpO2-Dataset" #"/data03/lk/rppg-toolbox/QHU_SPO2"                     # Raw dataset path, need to be updated
     FILE_LIST: "/root/jjt/file_list_new.csv"
-    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/deepphys_rgba_roi/test"  # "/data03/lk/mxl/train"   # Processed dataset save path, need to be updated
+    CACHED_PATH: "/root/jjt/SpO2-Toolbox/cache/tscan_rgba_roi/test"  # "/data03/lk/mxl/train"   # Processed dataset save path, need to be updated
     VIDEO_TYPE: "RGBA_ROI"  
     EXP_DATA_NAME: ""
     BEGIN: 0.85
@@ -101,15 +101,17 @@ TEST:
       RESIZE:
         H: 72
         W: 72
-DEVICE: cuda:2
+DEVICE: cuda:0
 NUM_OF_GPU_TRAIN: 2
 LOG:
   PATH: runs/exp
 MODEL:
-  DROP_RATE: 0.1
-  NAME: DeepPhys
+  DROP_RATE: 0.2
+  NAME: Tscan
+  TSCAN:
+    FRAME_DEPTH: 10
 INFERENCE:
-  BATCH_SIZE: 4
+  BATCH_SIZE: 2
   EVALUATION_METHOD: "FFT"        # "FFT" or "peak detection"
   EVALUATION_WINDOW:
     USE_SMALLER_WINDOW: True        # Change this if you'd like an evaluation window smaller than the test video length

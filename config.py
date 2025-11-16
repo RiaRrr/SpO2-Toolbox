@@ -5,6 +5,7 @@
 # Written by Ze Liu
 # --------------------------------------------------------'
 
+from logging import config
 import os, re
 import yaml
 from yacs.config import CfgNode as CN
@@ -16,6 +17,13 @@ _C.BASE = ['']
 # -----------------------------------------------------------------------------
 # Train settings
 # -----------------------------------------------------------------------------\
+"""
+Global task selector:
+- HR: heart rate (default)
+- RR: respiratory rate
+- SPO2: blood oxygen saturation (placeholder support)
+"""
+_C.TASK = 'HR'
 _C.TOOLBOX_MODE = ""
 _C.TRAIN = CN()
 _C.TRAIN.EPOCHS = 50
@@ -405,13 +413,27 @@ def update_config(config, args):
     # update flag from config file
     _update_config_from_file(config, args.config_file)
     config.defrost()
+
+    # Propagate global TASK down into each DATA namespace so loaders can consume it directly
+    try:
+        task_val = getattr(config, 'TASK', 'HR')
+        if hasattr(config, 'TRAIN') and hasattr(config.TRAIN, 'DATA'):
+            config.TRAIN.DATA.TASK = task_val
+        if hasattr(config, 'VALID') and hasattr(config.VALID, 'DATA'):
+            config.VALID.DATA.TASK = task_val
+        if hasattr(config, 'TEST') and hasattr(config.TEST, 'DATA'):
+            config.TEST.DATA.TASK = task_val
+        if hasattr(config, 'UNSUPERVISED') and hasattr(config.UNSUPERVISED, 'DATA'):
+            config.UNSUPERVISED.DATA.TASK = task_val
+    except Exception:
+        pass
     
     # UPDATE TRAIN PATHS
     if config.TRAIN.DATA.FILE_LIST_PATH == default_TRAIN_FILE_LIST_PATH:
         config.TRAIN.DATA.FILE_LIST_PATH = os.path.join(config.TRAIN.DATA.CACHED_PATH, 'DataFileLists')
 
     if config.TRAIN.DATA.EXP_DATA_NAME == '':
-        config.TRAIN.DATA.EXP_DATA_NAME = "_".join([config.TRAIN.DATA.DATASET, "SizeW{0}".format(
+        config.TRAIN.DATA.EXP_DATA_NAME = "_".join([config.TRAIN.DATA.DATASET, "Task{0}".format(config.TASK), "SizeW{0}".format(
             str(config.TRAIN.DATA.PREPROCESS.RESIZE.W)), "SizeH{0}".format(str(config.TRAIN.DATA.PREPROCESS.RESIZE.W)), "ClipLength{0}".format(
             str(config.TRAIN.DATA.PREPROCESS.CHUNK_LENGTH)), "DataType{0}".format("_".join(config.TRAIN.DATA.PREPROCESS.DATA_TYPE)),
                                       "DataAug{0}".format("_".join(config.TRAIN.DATA.PREPROCESS.DATA_AUG)),
@@ -449,7 +471,7 @@ def update_config(config, args):
             config.VALID.DATA.FILE_LIST_PATH = os.path.join(config.VALID.DATA.CACHED_PATH, 'DataFileLists')
 
         if config.VALID.DATA.EXP_DATA_NAME == '':
-            config.VALID.DATA.EXP_DATA_NAME = "_".join([config.VALID.DATA.DATASET, "SizeW{0}".format(
+            config.VALID.DATA.EXP_DATA_NAME = "_".join([config.VALID.DATA.DATASET, "Task{0}".format(config.TASK), "SizeW{0}".format(
                 str(config.VALID.DATA.PREPROCESS.RESIZE.W)), "SizeH{0}".format(str(config.VALID.DATA.PREPROCESS.RESIZE.W)), "ClipLength{0}".format(
                 str(config.VALID.DATA.PREPROCESS.CHUNK_LENGTH)), "DataType{0}".format("_".join(config.VALID.DATA.PREPROCESS.DATA_TYPE)),
                                         "DataAug{0}".format("_".join(config.VALID.DATA.PREPROCESS.DATA_AUG)),
@@ -487,7 +509,7 @@ def update_config(config, args):
         config.TEST.DATA.FILE_LIST_PATH = os.path.join(config.TEST.DATA.CACHED_PATH, 'DataFileLists')
 
     if config.TEST.DATA.EXP_DATA_NAME == '':
-        config.TEST.DATA.EXP_DATA_NAME = "_".join([config.TEST.DATA.DATASET, "SizeW{0}".format(
+        config.TEST.DATA.EXP_DATA_NAME = "_".join([config.TEST.DATA.DATASET, "Task{0}".format(config.TASK), "SizeW{0}".format(
             str(config.TEST.DATA.PREPROCESS.RESIZE.W)), "SizeH{0}".format(str(config.TEST.DATA.PREPROCESS.RESIZE.H)), "ClipLength{0}".format(
             str(config.TEST.DATA.PREPROCESS.CHUNK_LENGTH)), "DataType{0}".format("_".join(config.TEST.DATA.PREPROCESS.DATA_TYPE)),
                                       "DataAug{0}".format("_".join(config.TEST.DATA.PREPROCESS.DATA_AUG)),
@@ -557,7 +579,7 @@ def update_config(config, args):
         config.UNSUPERVISED.DATA.FILE_LIST_PATH = os.path.join(config.UNSUPERVISED.DATA.CACHED_PATH, 'DataFileLists')
 
     if config.UNSUPERVISED.DATA.EXP_DATA_NAME == '':
-        config.UNSUPERVISED.DATA.EXP_DATA_NAME = "_".join([config.UNSUPERVISED.DATA.DATASET, "SizeW{0}".format(
+        config.UNSUPERVISED.DATA.EXP_DATA_NAME = "_".join([config.UNSUPERVISED.DATA.DATASET, "Task{0}".format(config.TASK), "SizeW{0}".format(
             str(config.UNSUPERVISED.DATA.PREPROCESS.RESIZE.W)), "SizeH{0}".format(str(config.UNSUPERVISED.DATA.PREPROCESS.RESIZE.W)), "ClipLength{0}".format(
             str(config.UNSUPERVISED.DATA.PREPROCESS.CHUNK_LENGTH)), "DataType{0}".format("_".join(config.UNSUPERVISED.DATA.PREPROCESS.DATA_TYPE)),
                                       "DataAug{0}".format("_".join(config.UNSUPERVISED.DATA.PREPROCESS.DATA_AUG)),
@@ -595,10 +617,14 @@ def update_config(config, args):
 
     # Establish the directory to hold outputs saved during testing inside the
     # configured log directory (runs/exp by default)
+    exp_name_for_log = config.TEST.DATA.EXP_DATA_NAME if hasattr(config.TEST.DATA, 'EXP_DATA_NAME') else config.TRAIN.DATA.EXP_DATA_NAME
     if config.TOOLBOX_MODE == 'train_and_test' or config.TOOLBOX_MODE == 'only_test':
-        config.TEST.OUTPUT_SAVE_DIR = os.path.join(config.LOG.PATH, config.TEST.DATA.EXP_DATA_NAME, 'saved_test_outputs')
+        exp_setting = config.TRAIN.MODEL_FILE_NAME if hasattr(config.TRAIN, 'MODEL_FILE_NAME') else config.TRAIN.DATA.EXP_DATA_NAME
+        exp_name_for_log = exp_setting + "_" + exp_name_for_log
+        config.TEST.OUTPUT_SAVE_DIR = os.path.join(config.LOG.PATH, exp_name_for_log, 'saved_test_outputs')
     elif config.TOOLBOX_MODE == 'unsupervised_method':
-        config.UNSUPERVISED.OUTPUT_SAVE_DIR = os.path.join(config.LOG.PATH, config.UNSUPERVISED.DATA.EXP_DATA_NAME, 'saved_outputs')
+        exp_name_for_log = config.TOOLBOX_MODE + '_' + config.UNSUPERVISED.METHOD[0]
+        config.UNSUPERVISED.OUTPUT_SAVE_DIR = os.path.join(config.LOG.PATH, exp_name_for_log, 'saved_outputs')
     else:
         raise ValueError('TOOLBOX_MODE only supports train_and_test, only_test, or unsupervised_method!')
 

@@ -254,17 +254,61 @@ class SPO2Loader(BaseLoader):
             except Exception:
                 print(f"⚠️ Failed to read SpO2 file: {spo2_file}. Ignoring SpO2 for this sample.")
 
-        # Process frames, BVP signals, and SpO2 signals according to the configuration
-        if config_preprocess.USE_PSUEDO_PPG_LABEL:
-            bvps = self.generate_pos_psuedo_labels(frames, fs=self.config_data.FS)
+        # Decide label by TASK (default HR)
+        task = getattr(self.config_data, 'TASK', 'HR').upper() if isinstance(getattr(self.config_data, 'TASK', 'HR'), str) else 'HR'
+
+        # Prepare RR and SpO2 resampled signals if present
+        resampled_rr = None
+        if rr_values is not None:
+            try:
+                if rr_timestamps is not None:
+                    resampled_rr = self.synchronize_and_resample(rr_timestamps, rr_values, frame_timestamps)
+                else:
+                    # Fallback: interpolate RR values over their index to match frames
+                    rr_idx = np.linspace(0, len(rr_values) - 1, num=len(rr_values))
+                    frame_idx = np.linspace(0, len(rr_values) - 1, num=frames.shape[0])
+                    resampled_rr = np.interp(frame_idx, rr_idx, rr_values)
+            except Exception as e:
+                print(f"⚠️ Failed to resample RR for {video_dir}: {e}")
+                resampled_rr = None
+
+        resampled_spo2 = None
+        if spo2_values is not None:
+            try:
+                sp_idx = np.linspace(0, len(spo2_values) - 1, num=len(spo2_values))
+                frame_idx = np.linspace(0, len(spo2_values) - 1, num=frames.shape[0])
+                resampled_spo2 = np.interp(frame_idx, sp_idx, spo2_values)
+            except Exception as e:
+                print(f"⚠️ Failed to resample SpO2 for {video_dir}: {e}")
+                resampled_spo2 = None
+
+        # If RR task but RR missing/invalid, drop this sample from file list
+        if task == 'RR' and (resampled_rr is None or (hasattr(resampled_rr, '__len__') and len(resampled_rr) == 0)):
+            print(f"⚠️ RR task selected but RR.csv missing/invalid in {video_dir}. Dropping this sample.")
+            file_list_dict[i] = []
+            return
+
+        # Select label signal by task
+        if task == 'HR':
+            if config_preprocess.USE_PSUEDO_PPG_LABEL:
+                label_signal = self.generate_pos_psuedo_labels(frames, fs=self.config_data.FS)
+            else:
+                label_signal = resampled_bvp
+        elif task == 'RR':
+            label_signal = resampled_rr
+        elif task == 'SPO2':
+            if resampled_spo2 is None:
+                print(f"ℹ️ SpO2 task selected but SpO2.csv missing or invalid in {video_dir}. Using zeros as labels.")
+                label_signal = np.zeros(frames.shape[0], dtype=np.float32)
+            else:
+                label_signal = resampled_spo2
         else:
-            bvps = resampled_bvp
+            print(f"ℹ️ Unknown TASK '{task}', defaulting to HR label (BVP).")
+            label_signal = resampled_bvp
 
-        # Label once here
-
-        frames_clips, bvps_clips = self.preprocess(frames, bvps, config_preprocess)
+        frames_clips, label_clips = self.preprocess(frames, label_signal, config_preprocess)
         filename = f"{subject_id}_{experiment_id}"
-        input_name_list, label_name_list = self.save_multi_process(frames_clips, bvps_clips, filename)
+        input_name_list, label_name_list = self.save_multi_process(frames_clips, label_clips, filename)
         file_list_dict[i] = input_name_list
         
 

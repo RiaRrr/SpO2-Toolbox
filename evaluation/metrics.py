@@ -52,6 +52,13 @@ def calculate_metrics(predictions, labels, config):
     SNR_all = list()
     MACC_all = list()
     print("Calculating metrics!")
+    # Determine bandpass based on TASK
+    task = getattr(config, 'TASK', 'HR') if hasattr(config, 'TASK') else 'HR'
+    task = str(task).upper()
+    if task == 'RR':
+        band_low, band_high = 0.1, 0.5  # Hz (6-30 rpm)
+    else:
+        band_low, band_high = 0.75, 3.0  # Hz (45-180 bpm)
     for index in tqdm(predictions.keys(), ncols=80):
         prediction = _reform_data_from_dict(predictions[index])
         label = _reform_data_from_dict(labels[index])
@@ -79,17 +86,21 @@ def calculate_metrics(predictions, labels, config):
                 diff_flag_test = True
             else:
                 raise ValueError("Unsupported label type in testing!")
+            # RR task evaluation should not invert diff-normalized signals; RR labels are not treated as
+            # 1st-derivative waveforms. Force no cumsum/detrend inversion in RR mode.
+            if task == 'RR':
+                diff_flag_test = False
             
             if config.INFERENCE.EVALUATION_METHOD == "peak detection":
                 gt_hr_peak, pred_hr_peak, SNR, macc = calculate_metric_per_video(
-                    pred_window, label_window, diff_flag=diff_flag_test, fs=config.TEST.DATA.FS, hr_method='Peak')
+                    pred_window, label_window, diff_flag=diff_flag_test, fs=config.TEST.DATA.FS, hr_method='Peak', low_pass=band_low, high_pass=band_high)
                 gt_hr_peak_all.append(gt_hr_peak)
                 predict_hr_peak_all.append(pred_hr_peak)
                 SNR_all.append(SNR)
                 MACC_all.append(macc)
             elif config.INFERENCE.EVALUATION_METHOD == "FFT":
                 gt_hr_fft, pred_hr_fft, SNR, macc = calculate_metric_per_video(
-                    pred_window, label_window, diff_flag=diff_flag_test, fs=config.TEST.DATA.FS, hr_method='FFT')
+                    pred_window, label_window, diff_flag=diff_flag_test, fs=config.TEST.DATA.FS, hr_method='FFT', low_pass=band_low, high_pass=band_high)
                 gt_hr_fft_all.append(gt_hr_fft)
                 predict_hr_fft_all.append(pred_hr_fft)
                 SNR_all.append(SNR)
@@ -107,8 +118,8 @@ def calculate_metrics(predictions, labels, config):
         raise ValueError('Metrics.py evaluation only supports train_and_test and only_test!')
 
     if config.INFERENCE.EVALUATION_METHOD == "FFT":
-        gt_hr_fft_all = np.array(gt_hr_fft_all)
-        predict_hr_fft_all = np.array(predict_hr_fft_all)
+        gt_hr_fft_all = np.array(gt_hr_fft_all, dtype=float)
+        predict_hr_fft_all = np.array(predict_hr_fft_all, dtype=float)
         SNR_all = np.array(SNR_all)
         MACC_all = np.array(MACC_all)
         num_test_samples = len(predict_hr_fft_all)
@@ -135,9 +146,17 @@ def calculate_metrics(predictions, labels, config):
                 print("FFT MAPE (FFT Label): {0} +/- {1}".format(MAPE_FFT, standard_error))
                 csv_metrics["MAPE"] = float(MAPE_FFT)
             elif metric == "Pearson":
-                Pearson_FFT = np.corrcoef(predict_hr_fft_all, gt_hr_fft_all)
-                correlation_coefficient = Pearson_FFT[0][1]
-                standard_error = np.sqrt((1 - correlation_coefficient**2) / (num_test_samples - 2))
+                # Guard against all-constant / NaN arrays to avoid NaN Pearson
+                valid_mask = np.isfinite(predict_hr_fft_all) & np.isfinite(gt_hr_fft_all)
+                x = predict_hr_fft_all[valid_mask]
+                y = gt_hr_fft_all[valid_mask]
+                if len(x) < 2 or np.std(x) < 1e-8 or np.std(y) < 1e-8:
+                    correlation_coefficient = 0.0
+                    standard_error = 0.0
+                else:
+                    Pearson_FFT = np.corrcoef(x, y)
+                    correlation_coefficient = float(Pearson_FFT[0][1])
+                    standard_error = float(np.sqrt((1 - correlation_coefficient**2) / max(len(x) - 2, 1)))
                 print("FFT Pearson (FFT Label): {0} +/- {1}".format(correlation_coefficient, standard_error))
                 csv_metrics["Pearson"] = float(correlation_coefficient)
             elif metric == "SNR":
@@ -153,19 +172,30 @@ def calculate_metrics(predictions, labels, config):
             elif "AU" in metric:
                 pass
             elif "BA" in metric:  
-                compare = BlandAltman(gt_hr_fft_all, predict_hr_fft_all, config, averaged=True)
-                compare.scatter_plot(
-                    x_label='GT PPG HR [bpm]',
-                    y_label='rPPG HR [bpm]',
-                    show_legend=True, figure_size=(5, 5),
-                    the_title=f'{filename_id}_FFT_BlandAltman_ScatterPlot',
-                    file_name=f'{filename_id}_FFT_BlandAltman_ScatterPlot.pdf')
-                compare.difference_plot(
-                    x_label='Difference between rPPG HR and GT PPG HR [bpm]',
-                    y_label='Average of rPPG HR and GT PPG HR [bpm]',
-                    show_legend=True, figure_size=(5, 5),
-                    the_title=f'{filename_id}_FFT_BlandAltman_DifferencePlot',
-                    file_name=f'{filename_id}_FFT_BlandAltman_DifferencePlot.pdf')
+                # Bland-Altman can fail if data are degenerate (all same, NaNs) and KDE covariance is not PD.
+                # Add a small jitter and drop NaNs; if still problematic, skip plots gracefully.
+                try:
+                    valid_mask = np.isfinite(gt_hr_fft_all) & np.isfinite(predict_hr_fft_all)
+                    ba_gt = gt_hr_fft_all[valid_mask]
+                    ba_pred = predict_hr_fft_all[valid_mask]
+                    if len(ba_gt) < 3:
+                        print("[BA] Not enough valid points for Bland-Altman plot, skipping.")
+                    else:
+                        compare = BlandAltman(ba_gt, ba_pred, config, averaged=True)
+                        compare.scatter_plot(
+                            x_label='GT PPG HR [bpm]',
+                            y_label='rPPG HR [bpm]',
+                            show_legend=True, figure_size=(5, 5),
+                            the_title=f'{filename_id}_FFT_BlandAltman_ScatterPlot',
+                            file_name=f'{filename_id}_FFT_BlandAltman_ScatterPlot.pdf')
+                        compare.difference_plot(
+                            x_label='Difference between rPPG HR and GT PPG HR [bpm]',
+                            y_label='Average of rPPG HR and GT PPG HR [bpm]',
+                            show_legend=True, figure_size=(5, 5),
+                            the_title=f'{filename_id}_FFT_BlandAltman_DifferencePlot',
+                            file_name=f'{filename_id}_FFT_BlandAltman_DifferencePlot.pdf')
+                except Exception as e:
+                    print(f"[BA] Skipping Bland-Altman plots due to error: {e}")
             else:
                 raise ValueError("Wrong Test Metric Type")
         # Write CSV of test metrics if logging is configured
@@ -184,8 +214,8 @@ def calculate_metrics(predictions, labels, config):
         # Return metrics to allow trainer to also append into unified CSV
         return csv_metrics
     elif config.INFERENCE.EVALUATION_METHOD == "peak detection":
-        gt_hr_peak_all = np.array(gt_hr_peak_all)
-        predict_hr_peak_all = np.array(predict_hr_peak_all)
+        gt_hr_peak_all = np.array(gt_hr_peak_all, dtype=float)
+        predict_hr_peak_all = np.array(predict_hr_peak_all, dtype=float)
         SNR_all = np.array(SNR_all)
         MACC_all = np.array(MACC_all)
         num_test_samples = len(predict_hr_peak_all)
@@ -212,9 +242,16 @@ def calculate_metrics(predictions, labels, config):
                 print("PEAK MAPE (Peak Label): {0} +/- {1}".format(MAPE_PEAK, standard_error))
                 csv_metrics["MAPE"] = float(MAPE_PEAK)
             elif metric == "Pearson":
-                Pearson_PEAK = np.corrcoef(predict_hr_peak_all, gt_hr_peak_all)
-                correlation_coefficient = Pearson_PEAK[0][1]
-                standard_error = np.sqrt((1 - correlation_coefficient**2) / (num_test_samples - 2))
+                valid_mask = np.isfinite(predict_hr_peak_all) & np.isfinite(gt_hr_peak_all)
+                x = predict_hr_peak_all[valid_mask]
+                y = gt_hr_peak_all[valid_mask]
+                if len(x) < 2 or np.std(x) < 1e-8 or np.std(y) < 1e-8:
+                    correlation_coefficient = 0.0
+                    standard_error = 0.0
+                else:
+                    Pearson_PEAK = np.corrcoef(x, y)
+                    correlation_coefficient = float(Pearson_PEAK[0][1])
+                    standard_error = float(np.sqrt((1 - correlation_coefficient**2) / max(len(x) - 2, 1)))
                 print("PEAK Pearson (Peak Label): {0} +/- {1}".format(correlation_coefficient, standard_error))
                 csv_metrics["Pearson"] = float(correlation_coefficient)
             elif metric == "SNR":
@@ -230,19 +267,28 @@ def calculate_metrics(predictions, labels, config):
             elif "AU" in metric:
                 pass
             elif "BA" in metric:
-                compare = BlandAltman(gt_hr_peak_all, predict_hr_peak_all, config, averaged=True)
-                compare.scatter_plot(
-                    x_label='GT PPG HR [bpm]',
-                    y_label='rPPG HR [bpm]',
-                    show_legend=True, figure_size=(5, 5),
-                    the_title=f'{filename_id}_Peak_BlandAltman_ScatterPlot',
-                    file_name=f'{filename_id}_Peak_BlandAltman_ScatterPlot.pdf')
-                compare.difference_plot(
-                    x_label='Difference between rPPG HR and GT PPG HR [bpm]',
-                    y_label='Average of rPPG HR and GT PPG HR [bpm]',
-                    show_legend=True, figure_size=(5, 5),
-                    the_title=f'{filename_id}_Peak_BlandAltman_DifferencePlot',
-                    file_name=f'{filename_id}_Peak_BlandAltman_DifferencePlot.pdf')
+                try:
+                    valid_mask = np.isfinite(gt_hr_peak_all) & np.isfinite(predict_hr_peak_all)
+                    ba_gt = gt_hr_peak_all[valid_mask]
+                    ba_pred = predict_hr_peak_all[valid_mask]
+                    if len(ba_gt) < 3:
+                        print("[BA] Not enough valid points for Bland-Altman plot (peak), skipping.")
+                    else:
+                        compare = BlandAltman(ba_gt, ba_pred, config, averaged=True)
+                        compare.scatter_plot(
+                            x_label='GT PPG HR [bpm]',
+                            y_label='rPPG HR [bpm]',
+                            show_legend=True, figure_size=(5, 5),
+                            the_title=f'{filename_id}_Peak_BlandAltman_ScatterPlot',
+                            file_name=f'{filename_id}_Peak_BlandAltman_ScatterPlot.pdf')
+                        compare.difference_plot(
+                            x_label='Difference between rPPG HR and GT PPG HR [bpm]',
+                            y_label='Average of rPPG HR and GT PPG HR [bpm]',
+                            show_legend=True, figure_size=(5, 5),
+                            the_title=f'{filename_id}_Peak_BlandAltman_DifferencePlot',
+                            file_name=f'{filename_id}_Peak_BlandAltman_DifferencePlot.pdf')
+                except Exception as e:
+                    print(f"[BA] Skipping Bland-Altman plots (peak) due to error: {e}")
             else:
                 raise ValueError("Wrong Test Metric Type")
         # Write CSV of test metrics if logging is configured

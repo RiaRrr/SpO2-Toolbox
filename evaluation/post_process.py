@@ -130,7 +130,7 @@ def _calculate_SNR(pred_ppg_signal, hr_label, fs=30, low_pass=0.6, high_pass=3.3
         SNR = 0
     return SNR
 
-def calculate_metric_per_video(predictions, labels, fs=30, diff_flag=True, use_bandpass=True, hr_method='FFT'):
+def calculate_metric_per_video(predictions, labels, fs=30, diff_flag=True, use_bandpass=True, hr_method='FFT', low_pass=None, high_pass=None):
     """Calculate video-level HR and SNR"""
     if diff_flag:  # if the predictions and labels are 1st derivative of PPG signal.
         predictions = _detrend(np.cumsum(predictions), 100)
@@ -145,19 +145,26 @@ def calculate_metric_per_video(predictions, labels, fs=30, diff_flag=True, use_b
         # Note: to more closely match results in the NeurIPS 2023 toolbox paper,
         # we recommend using 0.75 in place of 0.6 and 2.5 in place of 3.3 in the 
         # below line.
-        [b, a] = butter(1, [0.6 / fs * 2, 3.3 / fs * 2], btype='bandpass')
+        lp = 0.6 if low_pass is None else float(low_pass)
+        hp = 3.3 if high_pass is None else float(high_pass)
+        [b, a] = butter(1, [lp / fs * 2, hp / fs * 2], btype='bandpass')
         predictions = scipy.signal.filtfilt(b, a, np.double(predictions))
         labels = scipy.signal.filtfilt(b, a, np.double(labels))
     
     macc = _compute_macc(predictions, labels)
 
     if hr_method == 'FFT':
-        hr_pred = _calculate_fft_hr(predictions, fs=fs)
-        hr_label = _calculate_fft_hr(labels, fs=fs)
+        lp = 0.6 if low_pass is None else float(low_pass)
+        hp = 3.3 if high_pass is None else float(high_pass)
+        hr_pred = _calculate_fft_hr(predictions, fs=fs, low_pass=lp, high_pass=hp)
+        hr_label = _calculate_fft_hr(labels, fs=fs, low_pass=lp, high_pass=hp)
     elif hr_method == 'Peak':
         hr_pred = _calculate_peak_hr(predictions, fs=fs)
         hr_label = _calculate_peak_hr(labels, fs=fs)
     else:
         raise ValueError('Please use FFT or Peak to calculate your HR.')
-    SNR = _calculate_SNR(predictions, hr_label, fs=fs)
+    # Use same band for SNR region-of-interest
+    lp = 0.6 if low_pass is None else float(low_pass)
+    hp = 3.3 if high_pass is None else float(high_pass)
+    SNR = _calculate_SNR(predictions, hr_label, fs=fs, low_pass=lp, high_pass=hp)
     return hr_label, hr_pred, SNR, macc

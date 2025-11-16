@@ -95,9 +95,11 @@ class PhysnetTrainer(BaseTrainer):
                     batch[0].to(torch.float32).to(self.device))
                 BVP_label = batch[1].to(
                     torch.float32).to(self.device)
+                # print('BVP_label:', BVP_label)
                 rPPG = (rPPG - torch.mean(rPPG)) / torch.std(rPPG)  # normalize
                 BVP_label = (BVP_label - torch.mean(BVP_label)) / \
                             torch.std(BVP_label)  # normalize
+                # print('RPPG:', rPPG)
                 loss = self.loss_model(rPPG, BVP_label)
                 loss.backward()
                 running_loss += loss.item()
@@ -246,6 +248,8 @@ class PhysnetTrainer(BaseTrainer):
                     labels[subj_index][sort_index] = label[idx]
 
         print('')
+        # print("labels: ", labels)
+        # print("predictions: ", predictions)
         metrics_dict = calculate_metrics(predictions, labels, self.config)
         if isinstance(metrics_dict, dict) and metrics_dict:
             test_epoch_used = None

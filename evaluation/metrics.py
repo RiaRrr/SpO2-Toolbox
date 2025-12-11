@@ -6,6 +6,13 @@ from evaluation.post_process import *
 from tqdm import tqdm
 from evaluation.BlandAltmanPy import BlandAltman
 
+# plotting (headless)
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from scipy.signal import periodogram
+from datetime import datetime
+
 def read_label(dataset):
     """Read manually corrected labels."""
     df = pd.read_csv("label/{0}_Comparison.csv".format(dataset))
@@ -44,13 +51,25 @@ def _reform_data_from_dict(data, flatten=True):
 
 
 def calculate_metrics(predictions, labels, config):
-    """Calculate rPPG Metrics (MAE, RMSE, MAPE, Pearson Coef.)."""
+    """Calculate rPPG Metrics (MAE, RMSE, MAPE, Pearson Coef.).
+
+    Note:
+        - Also returns per-window FFT-based label/prediction series for optional export
+          (used for writing {TASK}_prediction.csv with scalar values per window).
+    """
     predict_hr_fft_all = list()
     gt_hr_fft_all = list()
     predict_hr_peak_all = list()
     gt_hr_peak_all = list()
     SNR_all = list()
     MACC_all = list()
+
+    # Per-window outputs (scalars) for optional CSV export
+    # For FFT mode these store FFT-based HR/RR; for peak mode they store peak-based HR/RR.
+    window_level_labels = []
+    window_level_predictions = []
+    # Detailed per-window report for debugging: list of dicts with scalars and meta info
+    window_reports = []
     print("Calculating metrics!")
     # Determine bandpass based on TASK
     task = getattr(config, 'TASK', 'HR') if hasattr(config, 'TASK') else 'HR'
@@ -91,6 +110,7 @@ def calculate_metrics(predictions, labels, config):
             if task == 'RR':
                 diff_flag_test = False
             
+            method_name = None
             if config.INFERENCE.EVALUATION_METHOD == "peak detection":
                 gt_hr_peak, pred_hr_peak, SNR, macc = calculate_metric_per_video(
                     pred_window, label_window, diff_flag=diff_flag_test, fs=config.TEST.DATA.FS, hr_method='Peak', low_pass=band_low, high_pass=band_high)
@@ -98,6 +118,23 @@ def calculate_metrics(predictions, labels, config):
                 predict_hr_peak_all.append(pred_hr_peak)
                 SNR_all.append(SNR)
                 MACC_all.append(macc)
+                # Record per-window peak outputs for scalar export
+                window_level_labels.append(float(gt_hr_peak))
+                window_level_predictions.append(float(pred_hr_peak))
+                method_name = "Peak"
+                # Append detailed window-level debug info
+                window_reports.append({
+                    "video_id": index,
+                    "window_start_frame": int(i),
+                    "window_len": int(len(pred_window)),
+                    "method": "Peak",
+                    "gt_value": float(gt_hr_peak),
+                    "pred_value": float(pred_hr_peak),
+                    "SNR": float(SNR),
+                    "MACC": float(macc),
+                    "band_low": float(band_low),
+                    "band_high": float(band_high)
+                })
             elif config.INFERENCE.EVALUATION_METHOD == "FFT":
                 gt_hr_fft, pred_hr_fft, SNR, macc = calculate_metric_per_video(
                     pred_window, label_window, diff_flag=diff_flag_test, fs=config.TEST.DATA.FS, hr_method='FFT', low_pass=band_low, high_pass=band_high)
@@ -105,8 +142,99 @@ def calculate_metrics(predictions, labels, config):
                 predict_hr_fft_all.append(pred_hr_fft)
                 SNR_all.append(SNR)
                 MACC_all.append(macc)
+                # Record per-window FFT outputs for scalar export
+                window_level_labels.append(float(gt_hr_fft))
+                window_level_predictions.append(float(pred_hr_fft))
+                method_name = "FFT"
+                # Append detailed window-level debug info
+                window_reports.append({
+                    "video_id": index,
+                    "window_start_frame": int(i),
+                    "window_len": int(len(pred_window)),
+                    "method": "FFT",
+                    "gt_value": float(gt_hr_fft),
+                    "pred_value": float(pred_hr_fft),
+                    "SNR": float(SNR),
+                    "MACC": float(macc),
+                    "band_low": float(band_low),
+                    "band_high": float(band_high)
+                })
             else:
                 raise ValueError("Inference evaluation method name wrong!")
+
+            # --- per-window diagnostic figure (pred waveform, label waveform, pred PSD, label PSD) ---
+            try:
+                # decide base output dir from environment if provided
+                log_dir = os.environ.get('SPO2_LOG_DIR', None)
+                run_ts = os.environ.get('SPO2_RUN_TS', None)
+                if log_dir and run_ts:
+                    plot_root = os.path.join(log_dir, f"window_plots_{run_ts}")
+                else:
+                    run_ts_local = datetime.now().strftime('%Y%m%d_%H%M%S')
+                    plot_root = os.path.join('runs', 'exp', f'window_plots_auto_{run_ts_local}')
+                os.makedirs(plot_root, exist_ok=True)
+
+                fs_plot = float(config.TEST.DATA.FS) if hasattr(config, 'TEST') and hasattr(config.TEST, 'DATA') else 30.0
+                # compute PSDs
+                Nfft = 1 << ((len(pred_window) - 1).bit_length())
+                f_pred, pxx_pred = periodogram(pred_window, fs=fs_plot, nfft=Nfft, detrend=False)
+                f_lab, pxx_lab = periodogram(label_window, fs=fs_plot, nfft=Nfft, detrend=False)
+
+                fig, axes = plt.subplots(4, 1, figsize=(8, 10), constrained_layout=True)
+                t = np.arange(len(pred_window)) / fs_plot
+                axes[0].plot(t, pred_window, color='C0')
+                axes[0].set_title(f'Prediction waveform (video={index} start={i} len={len(pred_window)})')
+                axes[0].set_xlabel('time (s)')
+                axes[0].set_ylabel('amplitude')
+
+                axes[1].plot(t, label_window, color='C1')
+                axes[1].set_title('Label waveform')
+                axes[1].set_xlabel('time (s)')
+                axes[1].set_ylabel('amplitude')
+
+                axes[2].semilogy(f_pred, pxx_pred, color='C0')
+                axes[2].set_xlim(0, fs_plot/2)
+                axes[2].set_ylim(bottom=1e-12)
+                axes[2].axvspan(band_low, band_high, color='orange', alpha=0.2)
+                # mark dominant frequency in band (if any)
+                mask = (f_pred >= band_low) & (f_pred <= band_high)
+                if np.any(mask):
+                    fp_mask = f_pred[mask]
+                    pp_mask = pxx_pred[mask]
+                    idx_dom = np.argmax(pp_mask)
+                    dom_hz = float(fp_mask[idx_dom])
+                    axes[2].axvline(dom_hz, color='r', linestyle='--')
+                    axes[2].set_title(f'Prediction PSD - dom {dom_hz:.3f} Hz ({dom_hz*60:.2f} rpm)')
+                else:
+                    axes[2].set_title('Prediction PSD')
+                axes[2].set_xlabel('Frequency (Hz)')
+                axes[2].set_ylabel('Power')
+
+                axes[3].semilogy(f_lab, pxx_lab, color='C1')
+                axes[3].set_xlim(0, fs_plot/2)
+                axes[3].set_ylim(bottom=1e-12)
+                axes[3].axvspan(band_low, band_high, color='orange', alpha=0.2)
+                mask2 = (f_lab >= band_low) & (f_lab <= band_high)
+                if np.any(mask2):
+                    fl_mask = f_lab[mask2]
+                    pl_mask = pxx_lab[mask2]
+                    idx_dom2 = np.argmax(pl_mask)
+                    dom_hz2 = float(fl_mask[idx_dom2])
+                    axes[3].axvline(dom_hz2, color='r', linestyle='--')
+                    axes[3].set_title(f'Label PSD - dom {dom_hz2:.3f} Hz ({dom_hz2*60:.2f} rpm)')
+                else:
+                    axes[3].set_title('Label PSD')
+                axes[3].set_xlabel('Frequency (Hz)')
+                axes[3].set_ylabel('Power')
+
+                fig_name = os.path.join(plot_root, f"window_{index}_{i}_{method_name}.png")
+                fig.savefig(fig_name)
+                plt.close(fig)
+                # attach figure path to last window report if available
+                if len(window_reports) > 0:
+                    window_reports[-1]["figure_path"] = fig_name
+            except Exception as _ex:
+                print(f"Warning: failed to save window diagnostic figure: {_ex}")
     
     # Filename ID to be used in any results files (e.g., Bland-Altman plots) that get saved
     if config.TOOLBOX_MODE == 'train_and_test':
@@ -209,8 +337,21 @@ def calculate_metrics(predictions, labels, config):
                 if len(csv_metrics) > 0:
                     pd.DataFrame([csv_metrics]).to_csv(csv_path, index=False)
                     print(f"Saved test metrics CSV to: {csv_path}")
+                # Also persist detailed per-window report for debugging if available
+                try:
+                    if len(window_reports) > 0:
+                        windows_csv_path = os.path.join(log_dir, f"test_windows_{run_ts}.csv")
+                        pd.DataFrame(window_reports).to_csv(windows_csv_path, index=False)
+                        print(f"Saved per-window test report to: {windows_csv_path}")
+                        csv_metrics["_window_report_path"] = windows_csv_path
+                        csv_metrics["_window_report"] = window_reports
+                except Exception as _e:
+                    print(f"Warning: failed to save per-window test report: {_e}")
         except Exception as e:
             print(f"Warning: failed to save test metrics CSV: {e}")
+        # Attach window-level values (FFT or peak, depending on mode) for downstream consumers (e.g., CSV export)
+        csv_metrics["_fft_window_labels"] = np.array(window_level_labels, dtype=float)
+        csv_metrics["_fft_window_predictions"] = np.array(window_level_predictions, dtype=float)
         # Return metrics to allow trainer to also append into unified CSV
         return csv_metrics
     elif config.INFERENCE.EVALUATION_METHOD == "peak detection":
@@ -301,8 +442,21 @@ def calculate_metrics(predictions, labels, config):
                 if len(csv_metrics) > 0:
                     pd.DataFrame([csv_metrics]).to_csv(csv_path, index=False)
                     print(f"Saved test metrics CSV to: {csv_path}")
+                # Also persist detailed per-window report for debugging if available
+                try:
+                    if len(window_reports) > 0:
+                        windows_csv_path = os.path.join(log_dir, f"test_windows_{run_ts}.csv")
+                        pd.DataFrame(window_reports).to_csv(windows_csv_path, index=False)
+                        print(f"Saved per-window test report to: {windows_csv_path}")
+                        csv_metrics["_window_report_path"] = windows_csv_path
+                        csv_metrics["_window_report"] = window_reports
+                except Exception as _e:
+                    print(f"Warning: failed to save per-window test report: {_e}")
         except Exception as e:
             print(f"Warning: failed to save test metrics CSV: {e}")
+        # Attach window-level values (FFT or peak, depending on mode) for downstream consumers (e.g., CSV export)
+        csv_metrics["_fft_window_labels"] = np.array(window_level_labels, dtype=float)
+        csv_metrics["_fft_window_predictions"] = np.array(window_level_predictions, dtype=float)
         return csv_metrics
     else:
         raise ValueError("Inference evaluation method name wrong!")

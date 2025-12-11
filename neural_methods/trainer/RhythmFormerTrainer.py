@@ -82,7 +82,11 @@ class RhythmFormerTrainer(BaseTrainer):
 
                 self.optimizer.zero_grad()
                 pred_ppg = self.model(data)
-                pred_ppg = (pred_ppg-torch.mean(pred_ppg, axis=-1).view(-1, 1))/torch.std(pred_ppg, axis=-1).view(-1, 1)    # normalize
+                # normalize with epsilon to avoid division-by-zero
+                mean = torch.mean(pred_ppg, axis=-1, keepdim=True)
+                std = torch.std(pred_ppg, axis=-1, keepdim=True)
+                std = torch.clamp(std, min=1e-6)
+                pred_ppg = (pred_ppg - mean) / std
 
                 loss = 0.0
                 for ib in range(N):
@@ -151,7 +155,10 @@ class RhythmFormerTrainer(BaseTrainer):
                 data_valid, labels_valid = valid_batch[0].to(self.device), valid_batch[1].to(self.device)
                 N, D, C, H, W = data_valid.shape
                 pred_ppg_valid = self.model(data_valid)
-                pred_ppg_valid = (pred_ppg_valid-torch.mean(pred_ppg_valid, axis=-1).view(-1, 1))/torch.std(pred_ppg_valid, axis=-1).view(-1, 1)    # normalize
+                mean_v = torch.mean(pred_ppg_valid, axis=-1, keepdim=True)
+                std_v = torch.std(pred_ppg_valid, axis=-1, keepdim=True)
+                std_v = torch.clamp(std_v, min=1e-6)
+                pred_ppg_valid = (pred_ppg_valid - mean_v) / std_v
                 for ib in range(N):
                     loss = self.criterion(pred_ppg_valid[ib], labels_valid[ib], self.config.TRAIN.EPOCHS , self.config.VALID.DATA.FS , self.diff_flag)
                     valid_loss.append(loss.item())
@@ -202,7 +209,10 @@ class RhythmFormerTrainer(BaseTrainer):
                 chunk_len = self.chunk_len
                 data_test, labels_test = test_batch[0].to(self.config.DEVICE), test_batch[1].to(self.config.DEVICE)
                 pred_ppg_test = self.model(data_test)
-                pred_ppg_test = (pred_ppg_test-torch.mean(pred_ppg_test, axis=-1).view(-1, 1))/torch.std(pred_ppg_test, axis=-1).view(-1, 1)    # normalize
+                mean_t = torch.mean(pred_ppg_test, axis=-1, keepdim=True)
+                std_t = torch.std(pred_ppg_test, axis=-1, keepdim=True)
+                std_t = torch.clamp(std_t, min=1e-6)
+                pred_ppg_test = (pred_ppg_test - mean_t) / std_t
                 labels_test = labels_test.view(-1, 1)
                 pred_ppg_test = pred_ppg_test.view( -1 , 1)
                 for ib in range(batch_size):

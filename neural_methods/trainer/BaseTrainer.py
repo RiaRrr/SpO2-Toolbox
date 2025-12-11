@@ -128,13 +128,20 @@ class BaseTrainer:
     def test(self):
         pass
 
-    def save_test_outputs(self, predictions, labels, config):
+    def save_test_outputs(self, predictions, labels, config, metrics_dict=None):
+        """Save final predictions and labels to disk.
+
+        - 主 CSV: 逐帧波形 (prediction, label)，便于还原时域信号
+        - {TASK}_prediction.csv: 按窗口的 FFT 结果 (index, label, prediction)，每行都是标量
+        """
+        import pandas as pd
+
         # Prefer unified run root/saved_test_outputs if provided
         run_root = os.environ.get('SPO2_RUN_ROOT', None)
         output_dir = os.path.join(run_root, 'saved_test_outputs') if run_root else config.TEST.OUTPUT_SAVE_DIR
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
-        
+
         # Filename ID to be used in any output files that get saved
         if config.TOOLBOX_MODE == 'train_and_test':
             filename_id = self.model_file_name
@@ -143,18 +150,63 @@ class BaseTrainer:
             filename_id = model_file_root + "_" + config.TEST.DATA.DATASET
         else:
             raise ValueError('Metrics.py evaluation only supports train_and_test and only_test!')
-        output_path = os.path.join(output_dir, filename_id + '_outputs.pickle')
 
-        data = dict()
-        data['predictions'] = predictions
-        data['labels'] = labels
-        data['label_type'] = config.TEST.DATA.PREPROCESS.LABEL_TYPE
-        data['fs'] = config.TEST.DATA.FS
+        # Ensure numpy arrays on CPU (waveform export)
+        import numpy as _np
 
-        with open(output_path, 'wb') as handle: # save out frame dict pickle file
-            pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        def _to_1d_array(x):
+            if isinstance(x, (list, tuple)):
+                x = _np.asarray(x)
+            if hasattr(x, 'detach'):
+                x = x.detach().cpu().numpy()
+            elif hasattr(x, 'cpu'):
+                x = x.cpu().numpy()
+            x = _np.asarray(x).reshape(-1)
+            return x
 
-        print('Saving outputs to:', output_path)
+        pred_arr = _to_1d_array(predictions)
+        label_arr = _to_1d_array(labels)
+        n = min(len(pred_arr), len(label_arr))
+        pred_arr = pred_arr[:n]
+        label_arr = label_arr[:n]
+
+        df = pd.DataFrame({
+            'index': _np.arange(n),
+            'prediction': pred_arr,
+            'label': label_arr,
+            'label_type': [config.TEST.DATA.PREPROCESS.LABEL_TYPE] * n,
+            'fs': [config.TEST.DATA.FS] * n,
+        })
+
+        # 1) 模型+数据集命名的结果 CSV（原有逻辑）
+        csv_path = os.path.join(output_dir, filename_id + '_outputs.csv')
+        df.to_csv(csv_path, index=False)
+        print('Saving outputs to CSV:', csv_path)
+
+        # 2) 额外导出一个按 TASK 命名的 CSV：{TASK}_prediction.csv，内容为按窗口 FFT 得到的标量
+        try:
+            task_name = getattr(config, 'TASK', 'TASK').upper()
+        except Exception:
+            task_name = 'TASK'
+
+        # 只有在 FFT 评估、且 metrics_dict 提供了窗口级输出时才导出
+        if metrics_dict is not None and \
+           "_fft_window_labels" in metrics_dict and "_fft_window_predictions" in metrics_dict:
+            fft_labels = _np.asarray(metrics_dict["_fft_window_labels"], dtype=float).reshape(-1)
+            fft_preds = _np.asarray(metrics_dict["_fft_window_predictions"], dtype=float).reshape(-1)
+            m = min(len(fft_labels), len(fft_preds))
+            fft_labels = fft_labels[:m]
+            fft_preds = fft_preds[:m]
+
+            df_fft = pd.DataFrame({
+                'index': _np.arange(m),
+                'label': fft_labels,
+                'prediction': fft_preds,
+            })
+
+            task_csv_path = os.path.join(output_dir, f"{task_name}_prediction.csv")
+            df_fft.to_csv(task_csv_path, index=False)
+            print('Saving task-level FFT prediction CSV to:', task_csv_path)
 
     def save_best_model(self):
         """Save a snapshot of the current model as best_model.pth in self.model_dir."""

@@ -261,7 +261,7 @@ class PhysnetTrainer(BaseTrainer):
                 **{k:v for k,v in metrics_dict.items() if k in ['MAE','RMSE','MAPE','Pearson','SNR','MACC']}
             })
         if self.config.TEST.OUTPUT_SAVE_DIR: # saving test outputs 
-            self.save_test_outputs(predictions, labels, self.config)
+            self.save_test_outputs(predictions, labels, self.config, metrics_dict=metrics_dict)
 
     def save_model(self, index):
         target_dir = self._resolve_model_dir()
